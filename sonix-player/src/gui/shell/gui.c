@@ -1024,7 +1024,12 @@ void gui_init(gui_config_t *cfg) {
 		config_save();
 	}
 
-	switch_screen(dacpage_screen);
+	usb_mode_t boot_mode = usb_get_mode();
+	if (boot_mode == USB_MODE_DAC || boot_mode == USB_MODE_STORAGE) {
+		switch_screen(dacpage_screen);
+	} else {
+		switch_screen(main_menu_screen);
+	}
 	if (start_first_wifi_setup) {
 		wifisettings_start_first_boot();
 	}

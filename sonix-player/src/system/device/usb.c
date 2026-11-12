@@ -41,6 +41,8 @@
 #include "src/gui/library/browser.h"
 #include "src/gui/shell/gui.h"
 #include "src/system/audio/audio.h"
+#include "src/system/audio/usbdac.h"
+#include "src/system/core/config.h"
 #include "src/system/playback/device_state.h"
 #include "src/system/library/geniusdb.h"
 
@@ -252,6 +254,31 @@ bool usb_set_dac_mode(bool on) {
 
 bool usb_dac_mode(void) {
 	return dac_owns_usb;
+}
+
+usb_mode_t usb_get_mode(void) {
+	return (usb_mode_t)config_get_int("system", "usb_mode", (int)USB_MODE_MUSIC);
+}
+
+void usb_set_mode(usb_mode_t mode) {
+	config_set_int("system", "usb_mode", (int)mode);
+	config_save();
+
+	switch (mode) {
+	case USB_MODE_MUSIC:
+		usbdac_stop();
+		usb_storage_restore_manual();
+		usb_set_dac_mode(false);
+		break;
+	case USB_MODE_DAC:
+		usb_storage_restore_manual();
+		usbdac_start();
+		break;
+	case USB_MODE_STORAGE:
+		usbdac_stop();
+		usb_storage_export_manual();
+		break;
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1263,7 +1290,9 @@ static void *usb_thread(void *arg) {
 			if (storage_active) {
 				fprintf(stderr, "usb: cable unplugged while storage active, restoring card\n");
 				usb_storage_restore_manual();
-				usbdac_start();
+				if (usb_get_mode() == USB_MODE_DAC) {
+					usbdac_start();
+				}
 			}
 			if (exported) {
 				if (!locked_restore()) continue;

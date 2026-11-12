@@ -27,6 +27,15 @@ void usb_start(const char *sd_device, const char *sd_mount_point);
 // True while the gadget is exported to a host (the card is unmounted then).
 bool usb_storage_active(void);
 
+typedef enum {
+	USB_MODE_MUSIC = 0,
+	USB_MODE_DAC = 1,
+	USB_MODE_STORAGE = 2,
+} usb_mode_t;
+
+usb_mode_t usb_get_mode(void);
+void usb_set_mode(usb_mode_t mode);
+
 // Manual trigger for mass storage export and restore
 bool usb_storage_export_manual(void);
 bool usb_storage_restore_manual(void);

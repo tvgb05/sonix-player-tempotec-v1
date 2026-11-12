@@ -2462,8 +2462,12 @@ int main(int argc, char **argv) {
 	// USB mass storage: hand the card to a PC when one is attached, exactly
 	// like the stock firmware (see usb.h).
 	usb_start(storage_sd_device(), storage_sd_root());
-	// Start USB DAC mode by default
-	usbdac_start();
+	usb_mode_t boot_mode = usb_get_mode();
+	if (boot_mode == USB_MODE_DAC) {
+		usbdac_start();
+	} else if (boot_mode == USB_MODE_STORAGE) {
+		usb_storage_export_manual();
+	}
 #endif
 
 	// power / display idle management (backlight, screen-off, SoC suspend).

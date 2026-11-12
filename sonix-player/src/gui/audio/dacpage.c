@@ -15,7 +15,9 @@
 
 lv_obj_t *dacpage_screen;
 
-static lv_obj_t *mode_switch;
+static lv_obj_t *pill_music;
+static lv_obj_t *pill_dac;
+static lv_obj_t *pill_storage;
 static lv_obj_t *big_icon;
 static lv_obj_t *format_label;
 static lv_obj_t *status_label;
@@ -128,29 +130,31 @@ static void refresh_charge_glyph(void) {
 }
 
 static void refresh(void) {
-	bool storage_on = usb_storage_active();
+	usb_mode_t mode = usb_get_mode();
 
-	// Switch state: ON when USB Storage is active, OFF when in default DAC mode
-	if (storage_on) {
-		lv_obj_add_state(mode_switch, LV_STATE_CHECKED);
-	} else {
-		lv_obj_remove_state(mode_switch, LV_STATE_CHECKED);
-	}
+	settingsrow_pill_active(pill_music, mode == USB_MODE_MUSIC);
+	settingsrow_pill_active(pill_dac, mode == USB_MODE_DAC);
+	settingsrow_pill_active(pill_storage, mode == USB_MODE_STORAGE);
 
 	if (buffer_card) {
-		lv_obj_set_style_opa(buffer_card, storage_on ? LV_OPA_40 : LV_OPA_COVER, 0);
+		lv_obj_set_style_opa(buffer_card, (mode == USB_MODE_DAC) ? LV_OPA_COVER : LV_OPA_40, 0);
 	}
 
 	usbdac_state_t st;
 	usbdac_get_state(&st);
 
-	// Dimmed when both modes are off, but never LV_STATE_DISABLED
-	lv_obj_set_style_opa(charge_glyph, (st.active || storage_on) ? LV_OPA_COVER : LV_OPA_40, 0);
+	lv_obj_set_style_opa(charge_glyph, LV_OPA_COVER, 0);
 	refresh_charge_glyph();
 
 	lv_obj_set_style_text_color(status_label, status_normal_color, 0);
 
-	if (storage_on) {
+	if (mode == USB_MODE_MUSIC) {
+		lv_label_set_text(format_label, "");
+		lv_label_set_text(status_label, tr("dac_normal_mode"));
+		return;
+	}
+
+	if (mode == USB_MODE_STORAGE) {
 		lv_label_set_text(format_label, "");
 		lv_label_set_text(status_label, tr("dac_storage_on"));
 		return;
@@ -200,43 +204,14 @@ static void poll_cb(lv_timer_t *timer) {
 	refresh();
 }
 
-// Applies whatever the switch currently says.
-static void apply_mode_from_switch(void) {
-	if (lv_obj_has_state(mode_switch, LV_STATE_CHECKED)) {
-		// Switch ON: stop DAC and export Mass Storage (Drive D:)
-		usbdac_stop();
-		if (!usb_storage_export_manual()) {
-			lv_obj_remove_state(mode_switch, LV_STATE_CHECKED);
-			usbdac_start();
-		}
-	} else {
-		// Switch OFF: restore storage and return to default DAC mode
-		usb_storage_restore_manual();
-		usbdac_start();
+static void mode_pill_cb(lv_event_t *e) {
+	if (switcher_back_drag_active()) {
+		return;
 	}
+	usb_mode_t new_mode = (usb_mode_t)(intptr_t)lv_event_get_user_data(e);
+	usb_set_mode(new_mode);
 	last_serial = (unsigned)-1;
 	refresh();
-}
-
-// The whole row toggles, not just the switch: a 68x36 switch at the far edge of
-// the screen is a small target, and the row gives one the width of the page
-// whatever else may sit over that corner.
-static void mode_row_cb(lv_event_t *e) {
-	(void)e;
-	if (lv_obj_has_state(mode_switch, LV_STATE_CHECKED)) {
-		lv_obj_remove_state(mode_switch, LV_STATE_CHECKED);
-	} else {
-		lv_obj_add_state(mode_switch, LV_STATE_CHECKED);
-	}
-	apply_mode_from_switch();
-}
-
-static void mode_cb(lv_event_t *e) {
-	(void)e;
-	// The stored switch rather than the event target, matching every other
-	// toggle in the settings pages: the target of a VALUE_CHANGED can be the
-	// row rather than the switch depending on how the row was built.
-	apply_mode_from_switch();
 }
 
 static bool leaving;
@@ -267,10 +242,6 @@ static bool back_guard(void) {
 
 static void charge_cb(lv_event_t *e) {
 	(void)e;
-	if (!usbdac_is_active()) {
-		gui_notify_popup("dac_turn_dac_mode_on_first");
-		return;
-	}
 	// The choice is written to the config, so a player set never to charge in
 	// DAC mode stays that way across reboots.
 	bool now_on = !usbdac_charging_enabled();
@@ -284,7 +255,7 @@ static void charge_cb(lv_event_t *e) {
 }
 
 bool dacpage_is_holding(void) {
-	return usbdac_is_active() && lv_screen_active() == dacpage_screen;
+	return (usb_get_mode() == USB_MODE_DAC && usbdac_is_streaming()) && lv_screen_active() == dacpage_screen;
 }
 
 // Same shape as the corner buttons on the music page.
@@ -317,13 +288,11 @@ void dacpage_init(gui_config_t *cfg) {
 	const bool compact = cfg->screen_width < 320;
 	lv_obj_t *container = settingsrow_page(dacpage_screen, cfg, "dac");
 
-	// The mode is a switch, not a side effect of arriving: the page can be
-	// looked at, and the charging button read, without the cable being taken
-	// over the moment it opens.
-	mode_switch = NULL;
-	lv_obj_t *mode_row = settingsrow_toggle(container, "dac_mode", &mode_switch, mode_cb);
-	lv_obj_set_clickable(mode_row, true);
-	lv_obj_add_event_cb(mode_row, mode_row_cb, LV_EVENT_CLICKED, NULL);
+	lv_obj_t *mode_pills = NULL;
+	settingsrow_pills(container, "dac_mode_title", &mode_pills);
+	pill_music = settingsrow_pill(mode_pills, "mode_music", USB_MODE_MUSIC, mode_pill_cb);
+	pill_dac = settingsrow_pill(mode_pills, "mode_dac", USB_MODE_DAC, mode_pill_cb);
+	pill_storage = settingsrow_pill(mode_pills, "mode_storage", USB_MODE_STORAGE, mode_pill_cb);
 
 	buffer_slider = NULL;
 	buffer_value = NULL;
