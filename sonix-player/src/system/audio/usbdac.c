@@ -81,6 +81,17 @@ static int output_ms(void) {
 	return ms < OUTPUT_MS_MIN ? OUTPUT_MS_MIN : (ms > OUTPUT_MS_MAX ? OUTPUT_MS_MAX : ms);
 }
 
+int usbdac_get_output_ms(void) {
+	return output_ms();
+}
+
+void usbdac_set_output_ms(int ms) {
+	if (ms < OUTPUT_MS_MIN) ms = OUTPUT_MS_MIN;
+	if (ms > OUTPUT_MS_MAX) ms = OUTPUT_MS_MAX;
+	config_set_int("usb", "dac_output_ms", ms);
+	config_save();
+}
+
 // Ten milliseconds of audio, sized the way the stock player sizes it:
 // rate * 8 / 100 bytes, eight bytes per frame -- stereo, 32 bits a sample --
 // rounded up to a multiple of eight so a frame is never split.
@@ -452,7 +463,7 @@ static void *audio_main(void *arg) {
 
 	char *buffer = NULL;
 	int buffer_size = 0;
-	int open_rate = 0, open_bits = 0;
+	int open_rate = 0, open_bits = 0, open_ms = 0;
 	bool output_open = false;
 
 	struct uac_format current = {0};
@@ -484,7 +495,7 @@ static void *audio_main(void *arg) {
 				}
 				audio_external_end();
 				output_open = false;
-				open_rate = open_bits = 0;
+				open_rate = open_bits = open_ms = 0;
 				pthread_mutex_lock(&lock);
 				state.streaming = false;
 				touch();
@@ -527,13 +538,14 @@ static void *audio_main(void *arg) {
 			buffer_size = want;
 		}
 
-		if (!output_open || fmt.rate != open_rate || bits != open_bits) {
+		int want_ms = output_ms();
+		if (!output_open || fmt.rate != open_rate || bits != open_bits || want_ms != open_ms) {
 			if (output_open) {
 				audio_external_end();
 				output_open = false;
 			}
 			// DSD is handed to the DAC as it comes; the chip does the rest.
-			output_open = audio_external_begin_latency(fmt.rate, 2, dsd ? 32 : bits, output_ms());
+			output_open = audio_external_begin_latency(fmt.rate, 2, dsd ? 32 : bits, want_ms);
 			if (!output_open) {
 				// Say so, but keep reading: the gadget's OUT endpoint has to
 				// go on being drained or the host sees a device that stopped
@@ -543,6 +555,7 @@ static void *audio_main(void *arg) {
 			}
 			open_rate = fmt.rate;
 			open_bits = bits;
+			open_ms = want_ms;
 
 			// fmt.format is logged because it is the only field left that could
 			// carry the host's own bit depth. The driver always hands over
@@ -550,7 +563,7 @@ static void *audio_main(void *arg) {
 			// set to -- but if this number moves when the host setting changes,
 			// it is the one to map.
 			printf("usbdac: host is sending %d Hz, %s (format=%d flags=%d), output buffer %d ms\n", fmt.rate,
-				   dsd ? "DSD" : "32 bit PCM", fmt.format, fmt.flags, output_ms());
+				   dsd ? "DSD" : "32 bit PCM", fmt.format, fmt.flags, want_ms);
 			pthread_mutex_lock(&lock);
 			state.streaming = true;
 			state.sample_rate = fmt.rate;

@@ -90,4 +90,10 @@ unsigned usbdac_serial(void);
 void usbdac_set_charging(bool enabled);
 bool usbdac_charging_enabled(void);
 
+// ---------------------------------------------------------------------------
+// Buffer / Latency
+// ---------------------------------------------------------------------------
+int usbdac_get_output_ms(void);
+void usbdac_set_output_ms(int ms);
+
 #endif /* USBDAC_H */
