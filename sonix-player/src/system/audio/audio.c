@@ -4920,6 +4920,7 @@ int audio_external_write(const void *frames, int count) {
 	volume_prepare_warned = false;
 
 	int written = 0;
+	int pipe_retries = 0;
 	long last_progress_ms = log_ms();
 	while (written < count) {
 		const void *chunk = (const char *)volume_frames + (size_t)written * external_frame_bytes;
@@ -4931,6 +4932,7 @@ int audio_external_write(const void *frames, int count) {
 			visualizer_feed((const char *)volume_frames + (size_t)written * external_frame_bytes, (int)got, external_channels, external_bits, external_rate);
 			written += (int)got;
 			last_progress_ms = log_ms();
+			pipe_retries = 0;
 			continue;
 		}
 		if (got == 0 || got == -EAGAIN) {
@@ -4952,6 +4954,9 @@ int audio_external_write(const void *frames, int count) {
 				fprintf(stderr, "audio: the external source ran dry (%u underruns since it opened)\n", external_underruns);
 			}
 			snd_pcm_prepare(external_pcm);
+			if (++pipe_retries > 3) {
+				break;
+			}
 			continue;
 		}
 		if (got == -ESTRPIPE) {

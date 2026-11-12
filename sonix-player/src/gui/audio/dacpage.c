@@ -34,11 +34,11 @@ static lv_point_t drag_start_pt;
 static int drag_start_val_idx;
 static bool is_dragging_value;
 
-static const int BUFFER_STEPS_MS[] = {20, 40, 60, 80, 100, 150, 200, 300, 500};
+static const int BUFFER_STEPS_MS[] = {40, 60, 80, 100, 120, 150, 200, 300, 500};
 #define BUFFER_STEP_COUNT (sizeof(BUFFER_STEPS_MS) / sizeof(BUFFER_STEPS_MS[0]))
 
 static int buffer_ms_to_index(int ms) {
-	int best_idx = 3; // 80 ms default
+	int best_idx = 2; // 80 ms default
 	int best_diff = 99999;
 	for (int i = 0; i < (int)BUFFER_STEP_COUNT; i++) {
 		int diff = abs(BUFFER_STEPS_MS[i] - ms);
@@ -74,9 +74,11 @@ static void apply_buffer_index(int idx) {
 }
 
 static void buffer_slider_cb(lv_event_t *e) {
-	(void)e;
 	int idx = lv_slider_get_value(buffer_slider);
 	apply_buffer_index(idx);
+	if (lv_event_get_code(e) == LV_EVENT_RELEASED) {
+		config_save();
+	}
 }
 
 static void buffer_value_event_cb(lv_event_t *e) {
@@ -107,15 +109,19 @@ static void buffer_value_event_cb(lv_event_t *e) {
 		if (new_idx != lv_slider_get_value(buffer_slider)) {
 			apply_buffer_index(new_idx);
 		}
+	} else if (code == LV_EVENT_RELEASED) {
+		config_save();
 	} else if (code == LV_EVENT_LONG_PRESSED_REPEAT) {
 		if (!is_dragging_value) {
 			int idx = (lv_slider_get_value(buffer_slider) + 1) % BUFFER_STEP_COUNT;
 			apply_buffer_index(idx);
+			config_save();
 		}
 	} else if (code == LV_EVENT_CLICKED) {
 		if (!is_dragging_value) {
 			int idx = (lv_slider_get_value(buffer_slider) + 1) % BUFFER_STEP_COUNT;
 			apply_buffer_index(idx);
+			config_save();
 		}
 	}
 }

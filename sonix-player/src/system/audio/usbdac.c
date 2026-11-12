@@ -73,7 +73,7 @@ struct uac_format {
 // Lower is tighter and closer to an underrun, which on this path is a click
 // rather than a stall. [usb] dac_output_ms moves it.
 #define OUTPUT_MS_DEFAULT 80
-#define OUTPUT_MS_MIN 20
+#define OUTPUT_MS_MIN 40
 #define OUTPUT_MS_MAX 500
 
 static int output_ms(void) {
@@ -88,8 +88,10 @@ int usbdac_get_output_ms(void) {
 void usbdac_set_output_ms(int ms) {
 	if (ms < OUTPUT_MS_MIN) ms = OUTPUT_MS_MIN;
 	if (ms > OUTPUT_MS_MAX) ms = OUTPUT_MS_MAX;
-	config_set_int("usb", "dac_output_ms", ms);
-	config_save();
+	int old = (int)config_get_int("usb", "dac_output_ms", OUTPUT_MS_DEFAULT);
+	if (old != ms) {
+		config_set_int("usb", "dac_output_ms", ms);
+	}
 }
 
 // Ten milliseconds of audio, sized the way the stock player sizes it:
