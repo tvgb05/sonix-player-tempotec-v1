@@ -46,12 +46,6 @@ struct uac_format {
 	int flags;	// 1 = one bit per sample (DSD), otherwise 32-bit PCM
 };
 
-// The node appears only once the function is bound and the host has looked at
-// it. The stock player waits 499 times 10 ms; the same number here, since
-// whatever it is waiting for takes just as long either way.
-#define NODE_WAIT_TRIES 499
-#define NODE_WAIT_US 10000
-
 // How long to wait before asking again whether the host is streaming. Two
 // different waits: 100 ms is right while nothing is playing, and far too long
 // in the middle of a stream, where a buffer lasts 10 ms.
@@ -99,8 +93,6 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static usbdac_state_t state;
 static unsigned serial;
 
-static pthread_t audio_thread;
-static bool thread_valid;
 static pthread_t start_thread;
 static bool start_thread_valid;
 static volatile bool running;
@@ -446,16 +438,6 @@ bool usbdac_charging_enabled(void) {
 // The audio thread
 // ---------------------------------------------------------------------------
 
-static bool wait_for_node(void) {
-	for (int i = 0; i < NODE_WAIT_TRIES && running; i++) {
-		if (access(UAC_NODE, F_OK) == 0) {
-			return true;
-		}
-		usleep(NODE_WAIT_US);
-	}
-	return access(UAC_NODE, F_OK) == 0;
-}
-
 // The USB host supplies PCM, so it needs the same software equaliser as a
 // decoded track. DSD is a bitstream, not PCM: passing those words through the
 // filters would corrupt it, so it stays byte-for-byte untouched.
@@ -483,6 +465,9 @@ static void *audio_main(void *arg) {
 			// The driver went away, or the host pulled the cable. Not fatal on
 			// its own: look again in a moment.
 			usleep(IDLE_POLL_US);
+			if (!running || access(UAC_NODE, F_OK) != 0) {
+				break;
+			}
 			continue;
 		}
 
@@ -581,6 +566,9 @@ static void *audio_main(void *arg) {
 
 		ssize_t got = read(node_fd, buffer, (size_t)buffer_size);
 		if (got <= 0) {
+			if (got < 0 && (errno == ENODEV || errno == EBADF || errno == EIO)) {
+				break;
+			}
 			// End of a stream, or the host paused between tracks: back to the
 			// state poll rather than treating it as a failure.
 			usleep(2000);
@@ -610,10 +598,8 @@ static void *audio_main(void *arg) {
 	return NULL;
 }
 
-// The slow half of usbdac_start(), off the UI thread: storage_restore() shells
-// out to umount and mount, and wait_for_node() waits up to five seconds for
-// /dev/uac_sa to appear. Inline, that would freeze the interface for the whole
-// of it.
+// Background supervisor thread for DAC mode: builds UAC gadget, stays active,
+// and runs audio_main whenever the host opens /dev/uac_sa.
 static void *start_main(void *arg) {
 	(void)arg;
 
@@ -621,9 +607,7 @@ static void *start_main(void *arg) {
 	// anything of its own.
 	audio_stop();
 
-	// Tell usb.c to keep off the controller first: its watcher thread reacts to
-	// the cable being in by rebuilding the mass-storage gadget, which would
-	// land straight on top of this one.
+	// Tell usb.c to keep off the controller first
 	if (!usb_set_dac_mode(true)) {
 		set_error(tr("usbdac_usb_busy"));
 		goto failed;
@@ -637,43 +621,41 @@ static void *start_main(void *arg) {
 	apply_charging();
 
 	running = true;
-	if (!wait_for_node()) {
-		set_error(tr("usbdac_device_missing"));
-		running = false;
-		gadget_teardown();
-		usb_set_dac_mode(false);
-		goto failed;
-	}
-
-	node_fd = open(UAC_NODE, O_RDWR);
-	if (node_fd < 0) {
-		set_error(tr("usbdac_open_failed"), UAC_NODE, strerror(errno));
-		running = false;
-		gadget_teardown();
-		usb_set_dac_mode(false);
-		goto failed;
-	}
-
-	if (pthread_create(&audio_thread, NULL, audio_main, NULL) != 0) {
-		set_error(tr("usbdac_thread_failed"));
-		running = false;
-		close(node_fd);
-		node_fd = -1;
-		gadget_teardown();
-		usb_set_dac_mode(false);
-		goto failed;
-	}
-	thread_valid = true;
 
 	pthread_mutex_lock(&lock);
 	state.starting = false;
 	state.active = true;
+	state.error[0] = '\0';
 	touch();
 	pthread_mutex_unlock(&lock);
-	printf("usbdac: DAC mode on\n");
+	printf("usbdac: DAC mode on, waiting for USB host\n");
+
+	while (running) {
+		if (access(UAC_NODE, F_OK) != 0) {
+			usleep(250 * 1000);
+			continue;
+		}
+
+		node_fd = open(UAC_NODE, O_RDWR);
+		if (node_fd < 0) {
+			usleep(250 * 1000);
+			continue;
+		}
+
+		printf("usbdac: opened %s, running audio_main\n", UAC_NODE);
+		audio_main(NULL);
+
+		if (node_fd >= 0) {
+			close(node_fd);
+			node_fd = -1;
+		}
+		printf("usbdac: audio_main exited\n");
+	}
+
 	return NULL;
 
 failed:
+	running = false;
 	pthread_mutex_lock(&lock);
 	state.starting = false;
 	state.active = false;
@@ -693,8 +675,10 @@ bool usbdac_start(void) {
 	touch();
 	pthread_mutex_unlock(&lock);
 
+	running = true;
 	if (pthread_create(&start_thread, NULL, start_main, NULL) != 0) {
 		set_error(tr("usbdac_cannot_start_dac_mode"));
+		running = false;
 		pthread_mutex_lock(&lock);
 		state.starting = false;
 		touch();
@@ -702,34 +686,20 @@ bool usbdac_start(void) {
 		return false;
 	}
 	start_thread_valid = true;
-	return true; // "accepted", not "finished" -- watch the state
+	return true;
 }
 
 void usbdac_stop(void) {
-	// A start still in flight has to be waited for, or its thread would come
-	// back and switch the mode on again behind this.
-	if (start_thread_valid) {
-		pthread_join(start_thread, NULL);
-		start_thread_valid = false;
-	}
-	if (!usbdac_is_active() && !thread_valid) {
-		return;
-	}
-
 	running = false;
 
-	// Closing the node under the thread is what brings it back if it is
-	// sitting in read(). A char device gives no shutdown() to lean on the way
-	// a socket does, so this relies on the driver returning from the pending
-	// read when its file is closed -- which it does, and in the worst case the
-	// loop is never blocked for longer than one 10 ms buffer anyway.
 	if (node_fd >= 0) {
 		close(node_fd);
 		node_fd = -1;
 	}
-	if (thread_valid) {
-		pthread_join(audio_thread, NULL);
-		thread_valid = false;
+
+	if (start_thread_valid) {
+		pthread_join(start_thread, NULL);
+		start_thread_valid = false;
 	}
 
 	// Leaving DAC mode gives the charger back, and the indication with it.
@@ -738,8 +708,7 @@ void usbdac_stop(void) {
 
 	gadget_teardown();
 
-	// Give the controller back. usb.c rebuilds and rebinds the mass-storage
-	// gadget itself, so the computer sees the card again instead of nothing.
+	// Give the controller back
 	usb_set_dac_mode(false);
 
 	pthread_mutex_lock(&lock);

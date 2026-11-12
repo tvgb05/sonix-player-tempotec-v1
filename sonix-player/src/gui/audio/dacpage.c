@@ -107,7 +107,10 @@ static void apply_mode_from_switch(void) {
 	if (lv_obj_has_state(mode_switch, LV_STATE_CHECKED)) {
 		// Switch ON: stop DAC and export Mass Storage (Drive D:)
 		usbdac_stop();
-		usb_storage_export_manual();
+		if (!usb_storage_export_manual()) {
+			lv_obj_remove_state(mode_switch, LV_STATE_CHECKED);
+			usbdac_start();
+		}
 	} else {
 		// Switch OFF: restore storage and return to default DAC mode
 		usb_storage_restore_manual();

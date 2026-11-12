@@ -246,19 +246,6 @@ bool usb_set_dac_mode(bool on) {
 	dac_owns_usb = on;
 	owner_changed();
 	fprintf(stderr, "usb: controller %s\n", on ? "handed to DAC mode" : "back from DAC mode");
-	if (!on) {
-		// Entering DAC mode took the controller from ADB's gadget as well. With
-		// ADB on it goes back to that one (adb_keep_controller(), at the next
-		// poll): binding the card reader first would only be undone a second
-		// later.
-		if (adb_switched_on() && adb_is_running()) {
-			fprintf(stderr, "usb: ADB is on; its gadget gets the controller back\n");
-		} else {
-			pthread_mutex_lock(&storage_lock);
-			if (!usb_external_host_reserved()) ensure_storage_gadget();
-			pthread_mutex_unlock(&storage_lock);
-		}
-	}
 	suppress_popups = false;
 	return true;
 }
@@ -824,8 +811,10 @@ void usb_resume_restore(void) {
 	}
 	pthread_mutex_lock(&storage_lock);
 	if (!usb_external_host_reserved()) {
-		ensure_storage_gadget();
-		fprintf(stderr, "usb: storage gadget rebound after resume\n");
+		if (storage_active && !dac_owns_usb) {
+			ensure_storage_gadget();
+			fprintf(stderr, "usb: storage gadget rebound after resume\n");
+		}
 	}
 	pthread_mutex_unlock(&storage_lock);
 }
@@ -1050,6 +1039,7 @@ static bool storage_restore(void) {
 		fprintf(stderr, "usb: LUN removal could not be verified; card stays reserved\n");
 		return false;
 	}
+	gadget_unbind();
 	// Keep the mode until the card is safely remounted (or handed back to the
 	// supervisor), so a transient failure can be retried.
 	bool was_shared = export_mode == EXPORT_OWN_GADGET;
@@ -1090,11 +1080,96 @@ static bool locked_restore(void) {
 }
 
 bool usb_storage_export_manual(void) {
-	return locked_export() == EXPORT_OK;
+	pthread_mutex_lock(&storage_lock);
+	if (storage_active) {
+		pthread_mutex_unlock(&storage_lock);
+		return true;
+	}
+
+	if (dac_owns_usb || usb_external_host_reserved() || usbaudio_handover_pending()) {
+		fprintf(stderr, "usb: manual export rejected; USB controller is busy\n");
+		pthread_mutex_unlock(&storage_lock);
+		return false;
+	}
+
+	if (!storage_usb_begin()) {
+		pthread_mutex_unlock(&storage_lock);
+		return false;
+	}
+	storage_active = true;
+	storage_usb_end();
+
+	wifitransfer_release_card();
+	device_state_note_storage_gone();
+	audio_stop_and_wait(2000);
+	waveform_set_cache_dir(NULL);
+	sonixlink_set_thumbs_path(NULL);
+	library_close();
+	audiobookdb_close();
+	geniusdb_close();
+	logging_suspend_for_usb();
+	btlog_card_release();
+	cover_set_cache_dir(NULL);
+	radio_store_close();
+	sync();
+
+	bool unmounted = false;
+	export_claim_fd = usbexport_detach_and_claim(sd_device, sd_mount, &unmounted);
+	if (export_claim_fd < 0) {
+		fprintf(stderr, "usb: manual export abandoned; card was%s unmounted\n", unmounted ? "" : " not");
+		(void)resume_card(false);
+		pthread_mutex_unlock(&storage_lock);
+		return false;
+	}
+
+	if (!storage_usb_begin()) {
+		close(export_claim_fd);
+		export_claim_fd = -1;
+		storage_active = false;
+		pthread_mutex_unlock(&storage_lock);
+		return false;
+	}
+
+	ensure_storage_gadget();
+
+	export_mode = EXPORT_OWN_GADGET;
+	bool inserted = write_lun(sd_device);
+	storage_usb_end();
+
+	if (!inserted) {
+		fprintf(stderr, "usb: manual medium insertion failed; clearing LUN\n");
+		write_lun("");
+		export_mode = EXPORT_NONE;
+		(void)resume_card(false);
+		gadget_unbind();
+		pthread_mutex_unlock(&storage_lock);
+		return false;
+	}
+
+	storage_reenumerate();
+	fprintf(stderr, "usb: manual storage export succeeded for %s\n", sd_device);
+	if (!suppress_popups) gui_post(popup_connected_cb, NULL);
+
+	pthread_mutex_unlock(&storage_lock);
+	return true;
 }
 
 bool usb_storage_restore_manual(void) {
-	return locked_restore();
+	pthread_mutex_lock(&storage_lock);
+	if (!storage_active && export_mode == EXPORT_NONE) {
+		pthread_mutex_unlock(&storage_lock);
+		return true;
+	}
+
+	fprintf(stderr, "usb: manual storage restore requested\n");
+	write_lun("");
+	export_mode = EXPORT_NONE;
+	gadget_unbind();
+
+	bool restored = resume_card(true);
+	storage_active = false;
+	pthread_mutex_unlock(&storage_lock);
+	return restored;
 }
 
 static void *usb_thread(void *arg) {
@@ -1185,6 +1260,11 @@ static void *usb_thread(void *arg) {
 		bool vbus = vbus_present() || udc_configured();
 
 		if (!vbus) {
+			if (storage_active) {
+				fprintf(stderr, "usb: cable unplugged while storage active, restoring card\n");
+				usb_storage_restore_manual();
+				usbdac_start();
+			}
 			if (exported) {
 				if (!locked_restore()) continue;
 				exported = false;
@@ -1215,7 +1295,7 @@ static void *usb_thread(void *arg) {
 			}
 
 			pthread_mutex_lock(&storage_lock);
-			if (!usb_external_host_reserved() && !dac_owns_usb && !usbaudio_handover_pending()) {
+			if (!usb_external_host_reserved() && !dac_owns_usb && !usbaudio_handover_pending() && storage_active) {
 				if (!parked && !power_screen_is_on() && !adb_is_running()) {
 					gadget_unbind();
 					parked = true;
@@ -1238,7 +1318,7 @@ static void *usb_thread(void *arg) {
 		if (parked) {
 			// Serialize the whole rebind with an explicit external-host trial.
 			pthread_mutex_lock(&storage_lock);
-			if (!usb_external_host_reserved() && !dac_owns_usb && !usbaudio_handover_pending()) {
+			if (!usb_external_host_reserved() && !dac_owns_usb && !usbaudio_handover_pending() && storage_active) {
 				typec_force_sink();
 				if (!adb_switched_on() && !gadget_rebind()) {
 					ensure_storage_gadget();
@@ -1317,28 +1397,12 @@ void usb_start(const char *device, const char *mount_point) {
 		return;
 	}
 
-	// The port is a peripheral from here on, whatever is at the other end of
-	// the cable. The stock player re-applies its own saved choice at every boot
-	// for the same reason: the role is not remembered across one.
-	typec_force_sink();
-
 	snprintf(sd_device, sizeof(sd_device), "%s", device);
 	snprintf(sd_mount, sizeof(sd_mount), "%s", mount_point);
-
-	// The empty-medium gadget goes up right away, unless ADB owns the
-	// controller -- then its gadget provides the enumeration signal instead.
-	// "Owns" includes the moment before adbd has bound it: started just
-	// before this, it may not have got that far, and a card reader bound now
-	// would keep it off the controller (see adb_keep_controller()).
-	pthread_mutex_lock(&storage_lock);
-	if (!usb_external_host_reserved() && !adb_gadget_bound() && !(adb_switched_on() && adb_is_running())) {
-		ensure_storage_gadget();
-	}
-	pthread_mutex_unlock(&storage_lock);
 
 	pthread_t thread;
 	if (pthread_create(&thread, NULL, usb_thread, NULL) == 0) {
 		pthread_detach(thread);
-		fprintf(stderr, "usb: watching for a USB host (exporting %s)\n", sd_device);
+		fprintf(stderr, "usb: watching for a USB host\n");
 	}
 }
