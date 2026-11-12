@@ -893,7 +893,7 @@ static bool bluetooth_in_use(void) {
 static bool player_is_busy(bool playing, uint32_t input_idle) {
 	return playing ||							   // a track or a station
 		   input_idle < POWER_TICK_MS * 4 ||	   // a key just pressed
-		   usbdac_is_active() ||				   // a computer feeding the DAC
+		   usbdac_is_streaming() ||				   // a computer feeding the DAC
 		   usb_storage_active() ||				   // the card exported over USB
 		   gearboy_running() ||					   // the emulator
 		   library_scan_running() ||			   // a scan, which is also writing to the card
@@ -1561,7 +1561,7 @@ static void suspend_if_idle(uint32_t now, bool playing) {
 	// And what the cable is carrying: the card exported over USB, or a computer
 	// feeding the DAC, both of which the suspend would cut. Below the cable
 	// itself now, and kept because a host can hold the port without VBUS.
-	if (usb_storage_active() || usbdac_is_active() || usbaudio_active() ||
+	if (usb_storage_active() || (usbdac_is_streaming() && usb_vbus_present()) || usbaudio_active() ||
 		usbaudio_handover_pending() || usbhostprobe_active()) {
 		mem_skip("the USB controller is in use or its host role is being restored");
 		return;

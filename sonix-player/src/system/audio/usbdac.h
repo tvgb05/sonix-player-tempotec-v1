@@ -69,6 +69,7 @@ bool usbdac_start(void);
 void usbdac_stop(void);
 
 bool usbdac_is_active(void);
+bool usbdac_is_streaming(void);
 void usbdac_get_state(usbdac_state_t *out);
 
 // Bumped whenever the state changes, so a page can redraw only when there is

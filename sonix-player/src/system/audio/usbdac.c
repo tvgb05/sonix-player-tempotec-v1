@@ -261,6 +261,22 @@ static bool first_udc(char *out, size_t out_size) {
 static bool gadget_build(void) {
 	char path[512];
 
+	system("[ -d /sys/kernel/config/usb_gadget ] || mount -t configfs none /sys/kernel/config 2>/dev/null");
+	mkdir("/sys/kernel/config/usb_gadget", 0755);
+
+	for (int port = 0; port < 4; port++) {
+		char ppath[64];
+		snprintf(ppath, sizeof(ppath), "/sys/class/typec/port%d/port_type", port);
+		if (access(ppath, W_OK) == 0) {
+			FILE *pf = fopen(ppath, "w");
+			if (pf) {
+				fputs("sink\n", pf);
+				fclose(pf);
+			}
+			break;
+		}
+	}
+
 	// Off the controller first: one controller takes one gadget, and a bound
 	// configuration cannot be changed. Neither write is required to succeed --
 	// the gadget may not exist, or may already be idle.
@@ -350,7 +366,9 @@ static bool gadget_build(void) {
 		set_error(tr("usbdac_no_controller"));
 		return false;
 	}
-	if (!write_file(GADGET "/UDC", udc)) {
+	char udc_line[300];
+	snprintf(udc_line, sizeof(udc_line), "%s\n", udc);
+	if (!write_file(GADGET "/UDC", udc_line) && !write_file(GADGET "/UDC", udc)) {
 		// This is where a malformed descriptor set shows up, and the errno is
 		// the only clue: EBUSY means something else still holds the
 		// controller, EINVAL means the gadget itself was refused.
@@ -669,6 +687,7 @@ static void *start_main(void *arg) {
 
 failed:
 	running = false;
+	start_thread_valid = false;
 	pthread_mutex_lock(&lock);
 	state.starting = false;
 	state.active = false;
@@ -678,8 +697,12 @@ failed:
 }
 
 bool usbdac_start(void) {
-	if (usbdac_is_active() || start_thread_valid) {
+	if (running || usbdac_is_active()) {
 		return true;
+	}
+	if (start_thread_valid) {
+		pthread_join(start_thread, NULL);
+		start_thread_valid = false;
 	}
 
 	pthread_mutex_lock(&lock);
@@ -692,6 +715,7 @@ bool usbdac_start(void) {
 	if (pthread_create(&start_thread, NULL, start_main, NULL) != 0) {
 		set_error(tr("usbdac_cannot_start_dac_mode"));
 		running = false;
+		start_thread_valid = false;
 		pthread_mutex_lock(&lock);
 		state.starting = false;
 		touch();
@@ -734,6 +758,13 @@ void usbdac_stop(void) {
 bool usbdac_is_active(void) {
 	pthread_mutex_lock(&lock);
 	bool on = state.active;
+	pthread_mutex_unlock(&lock);
+	return on;
+}
+
+bool usbdac_is_streaming(void) {
+	pthread_mutex_lock(&lock);
+	bool on = state.active && state.streaming;
 	pthread_mutex_unlock(&lock);
 	return on;
 }

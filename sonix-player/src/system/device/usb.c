@@ -1392,6 +1392,7 @@ void usb_start(const char *device, const char *mount_point) {
 		fprintf(stderr, "usb: no VBUS node found; USB mode disabled\n");
 		return;
 	}
+	system("[ -d /sys/kernel/config/usb_gadget ] || mount -t configfs none /sys/kernel/config 2>/dev/null");
 	if (access("/sys/kernel/config", F_OK) != 0) {
 		fprintf(stderr, "usb: no configfs on this kernel; USB mode disabled\n");
 		return;

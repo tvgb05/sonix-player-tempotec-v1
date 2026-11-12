@@ -560,7 +560,7 @@ static void key_async_cb(void *user_data) {
 	// that transport is not what the device is doing. Pressing them then does
 	// not do nothing -- it starts a local track underneath whatever is actually
 	// going on, which is worse than nothing.
-	if (usbdac_is_active() || wifitransfer_running()) {
+	if (usbdac_is_streaming() || dacpage_is_holding() || wifitransfer_running()) {
 		return;
 	}
 
@@ -1024,7 +1024,7 @@ void gui_init(gui_config_t *cfg) {
 		config_save();
 	}
 
-	switch_screen(main_menu_screen);
+	switch_screen(dacpage_screen);
 	if (start_first_wifi_setup) {
 		wifisettings_start_first_boot();
 	}

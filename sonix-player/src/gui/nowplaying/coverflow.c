@@ -1720,7 +1720,7 @@ static void sheet_drag_end(void) {
 // down.
 static bool sheet_may_open(void) {
 	return sheet && !sheet_open && coverflow_enabled() && !quickpanel_is_open() && !quickpanel_blocked() &&
-		   !usbdac_is_active() && !btreceiver_is_active();
+		   !usbdac_is_streaming() && !btreceiver_is_active();
 }
 
 bool coverflow_is_open(void) { return sheet_open || sheet_dragging; }
