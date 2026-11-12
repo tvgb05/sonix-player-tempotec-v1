@@ -1089,6 +1089,14 @@ static bool locked_restore(void) {
 	return ok;
 }
 
+bool usb_storage_export_manual(void) {
+	return locked_export() == EXPORT_OK;
+}
+
+bool usb_storage_restore_manual(void) {
+	return locked_restore();
+}
+
 static void *usb_thread(void *arg) {
 	(void)arg;
 	thread_be_background("usb watcher");
@@ -1279,14 +1287,10 @@ static void *usb_thread(void *arg) {
 			continue;
 		}
 
-		export_result_t result = locked_export();
-		exported = storage_active;
-		if (result == EXPORT_FAILED) {
-			// Do not repeatedly stop playback and close databases while the
-			// same PC remains attached. Replug to try again.
-			if (!exported) await_unplug = true;
-			gui_post(popup_export_failed_cb, NULL);
-		}
+		/* Auto-export disabled: DAC mode is the default mode.
+		   Storage export is now manually triggered via the menu toggle. */
+		(void)exported;
+		(void)await_unplug;
 	}
 
 	return NULL;

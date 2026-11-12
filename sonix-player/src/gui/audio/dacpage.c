@@ -10,6 +10,7 @@
 #include "src/gui/shell/theme.h"
 #include "src/system/core/lang.h"
 #include "src/system/audio/usbdac.h"
+#include "src/system/device/usb.h"
 
 lv_obj_t *dacpage_screen;
 
@@ -33,28 +34,29 @@ static void refresh_charge_glyph(void) {
 }
 
 static void refresh(void) {
-	usbdac_state_t st;
-	usbdac_get_state(&st);
+	bool storage_on = usb_storage_active();
 
-	// The switch follows the mode rather than the finger: a start that failed
-	// must not leave the toggle sitting proudly in the on position.
-	if (st.active || st.starting) {
+	// Switch state: ON when USB Storage is active, OFF when in default DAC mode
+	if (storage_on) {
 		lv_obj_add_state(mode_switch, LV_STATE_CHECKED);
 	} else {
 		lv_obj_remove_state(mode_switch, LV_STATE_CHECKED);
 	}
 
-	// Dimmed when the mode is off, but never LV_STATE_DISABLED: a disabled LVGL
-	// object stops receiving presses altogether, so the button stays clickable
-	// and explains itself instead of silently doing nothing.
-	lv_obj_set_style_opa(charge_glyph, st.active ? LV_OPA_COVER : LV_OPA_40, 0);
+	usbdac_state_t st;
+	usbdac_get_state(&st);
+
+	// Dimmed when both modes are off, but never LV_STATE_DISABLED
+	lv_obj_set_style_opa(charge_glyph, (st.active || storage_on) ? LV_OPA_COVER : LV_OPA_40, 0);
 	refresh_charge_glyph();
 
-	// Back to the theme's colour unless the checks below make it red. Set, never
-	// removed: lv_obj_remove_style(obj, NULL, ...) drops every local style on
-	// that part, width, font and alignment included. The colour to restore is
-	// captured at build time, before anything local is set over it.
 	lv_obj_set_style_text_color(status_label, status_normal_color, 0);
+
+	if (storage_on) {
+		lv_label_set_text(format_label, "");
+		lv_label_set_text(status_label, tr("dac_storage_on"));
+		return;
+	}
 
 	if (st.error[0]) {
 		lv_label_set_text(format_label, "");
@@ -69,23 +71,12 @@ static void refresh(void) {
 		return;
 	}
 
-	if (!st.active) {
-		lv_label_set_text(format_label, "");
-		lv_label_set_text(status_label, tr("dac_note"));
-		return;
-	}
-
 	if (!st.streaming) {
 		lv_label_set_text(format_label, "");
 		lv_label_set_text(status_label, tr("dac_waiting"));
 		return;
 	}
 
-	// The numbers under the icon. The rate is the host's choice: the gadget
-	// announces the whole range and the computer picks one.
-	//
-	// Sample rate only: the driver always delivers 32-bit words whatever the
-	// host negotiated, so a bit depth printed here would always read 32.
 	char text[64];
 	if (st.dsd) {
 		snprintf(text, sizeof(text), "DSD  %d Hz", st.sample_rate);
@@ -114,9 +105,13 @@ static void poll_cb(lv_timer_t *timer) {
 // Applies whatever the switch currently says.
 static void apply_mode_from_switch(void) {
 	if (lv_obj_has_state(mode_switch, LV_STATE_CHECKED)) {
-		usbdac_start(); // a failure lands in the state, and refresh() shows it
-	} else {
+		// Switch ON: stop DAC and export Mass Storage (Drive D:)
 		usbdac_stop();
+		usb_storage_export_manual();
+	} else {
+		// Switch OFF: restore storage and return to default DAC mode
+		usb_storage_restore_manual();
+		usbdac_start();
 	}
 	last_serial = (unsigned)-1;
 	refresh();
@@ -164,18 +159,9 @@ static void really_leave(void *user) {
 	lv_async_call(leave_async, NULL);
 }
 
-// The back chevron and the swipe both come through here. Returning true means
-// "handled, stay put": DAC mode is not something to wander out of by accident
-// with a computer streaming through the cable. Once it is off the guard steps
-// aside and back works as it does anywhere else.
+// Allow returning freely to home/menus without cutting off DAC mode
 static bool back_guard(void) {
-	if (leaving || !usbdac_is_active()) {
-		return false;
-	}
-	confirm_show("dac_leave_dac_mode",
-				 "dac_leave_confirm_note", "leave",
-				 really_leave, NULL);
-	return true;
+	return false;
 }
 
 static void charge_cb(lv_event_t *e) {

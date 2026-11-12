@@ -68,6 +68,7 @@
 #include "src/system/lastfm/lastfm.h"
 #include "src/system/listenbrainz/listenbrainz.h"
 #include "src/system/library/library.h"
+#include "src/system/audio/usbdac.h"
 #include "src/system/core/logging.h"
 #include "src/system/pet/petwatch.h"
 #include "src/system/playback/playlist.h"
@@ -2461,6 +2462,8 @@ int main(int argc, char **argv) {
 	// USB mass storage: hand the card to a PC when one is attached, exactly
 	// like the stock firmware (see usb.h).
 	usb_start(storage_sd_device(), storage_sd_root());
+	// Start USB DAC mode by default
+	usbdac_start();
 #endif
 
 	// power / display idle management (backlight, screen-off, SoC suspend).

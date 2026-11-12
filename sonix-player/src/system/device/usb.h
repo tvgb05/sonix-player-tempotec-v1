@@ -27,6 +27,10 @@ void usb_start(const char *sd_device, const char *sd_mount_point);
 // True while the gadget is exported to a host (the card is unmounted then).
 bool usb_storage_active(void);
 
+// Manual trigger for mass storage export and restore
+bool usb_storage_export_manual(void);
+bool usb_storage_restore_manual(void);
+
 // Hands the USB controller to DAC mode, and takes it back.
 //
 // While it is handed over, everything in usb.c stands down: no gadget is
