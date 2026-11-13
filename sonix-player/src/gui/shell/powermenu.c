@@ -484,7 +484,7 @@ void powermenu_init(gui_config_t *cfg) {
 	lv_obj_align(sleep_card, LV_ALIGN_TOP_MID, 0, bp_pick(108, 170));
 	lv_obj_set_style_radius(sleep_card, 16, 0);
 	lv_obj_set_style_bg_color(sleep_card, lv_color_white(), 0);
-	lv_obj_set_style_bg_opa(sleep_card, LV_OPA_15, 0);
+	lv_obj_set_style_bg_opa(sleep_card, LV_OPA_20, 0);
 	lv_obj_set_style_border_width(sleep_card, 0, 0);
 	lv_obj_set_style_pad_hor(sleep_card, bp_pick(8, 14), 0);
 	lv_obj_set_style_pad_ver(sleep_card, bp_pick(6, 10), 0);
@@ -574,7 +574,7 @@ void powermenu_init(gui_config_t *cfg) {
 	lv_obj_set_size(btn_minus, bp_pick(30, 42), bp_pick(30, 42));
 	lv_obj_set_style_radius(btn_minus, LV_RADIUS_CIRCLE, 0);
 	lv_obj_set_style_bg_color(btn_minus, lv_color_white(), 0);
-	lv_obj_set_style_bg_opa(btn_minus, LV_OPA_25, 0);
+	lv_obj_set_style_bg_opa(btn_minus, LV_OPA_20, 0);
 	lv_obj_set_style_bg_opa(btn_minus, LV_OPA_60, LV_STATE_PRESSED);
 	lv_obj_set_style_pad_all(btn_minus, 0, 0);
 	lv_obj_add_event_cb(btn_minus, step_minus_cb, LV_EVENT_CLICKED, NULL);
@@ -609,7 +609,7 @@ void powermenu_init(gui_config_t *cfg) {
 	lv_obj_set_size(btn_plus, bp_pick(30, 42), bp_pick(30, 42));
 	lv_obj_set_style_radius(btn_plus, LV_RADIUS_CIRCLE, 0);
 	lv_obj_set_style_bg_color(btn_plus, lv_color_white(), 0);
-	lv_obj_set_style_bg_opa(btn_plus, LV_OPA_25, 0);
+	lv_obj_set_style_bg_opa(btn_plus, LV_OPA_20, 0);
 	lv_obj_set_style_bg_opa(btn_plus, LV_OPA_60, LV_STATE_PRESSED);
 	lv_obj_set_style_pad_all(btn_plus, 0, 0);
 	lv_obj_add_event_cb(btn_plus, step_plus_cb, LV_EVENT_CLICKED, NULL);
