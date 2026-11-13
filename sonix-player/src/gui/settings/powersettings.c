@@ -40,6 +40,8 @@ static const struct {
 static lv_obj_t *charge_value, *charge_slider;
 static lv_obj_t *auto_off_switch, *auto_off_value, *auto_off_slider, *auto_off_card;
 static lv_obj_t *led_on_switch, *led_off_switch, *led_off_card;
+static lv_obj_t *led_effect_card, *led_effect_pills;
+static lv_obj_t *pill_effect_track, *pill_effect_breathe, *pill_effect_rainbow;
 static lv_obj_t *led_bright_value, *led_bright_slider;
 static lv_obj_t *led_trans_value, *led_trans_slider;
 static lv_obj_t *key_lock_switch;
@@ -127,6 +129,7 @@ void powersettings_apply(void) {
 	led_set_idle_off(config_get_bool("power", "led_off_standby", true));
 	led_set_brightness(LED_BRIGHTNESS_MIN + led_brightness_index());
 	led_set_transition_ms(LED_TRANSITION_MIN_MS + (led_transition_index() * LED_TRANSITION_STEP_MS));
+	led_set_effect((led_effect_t)config_get_int("power", "led_effect", (int)LED_EFFECT_TRACK));
 
 	input_set_key_lock(config_get_bool("power", "lock_keys_screen_off", false));
 
@@ -168,12 +171,25 @@ static void refresh_labels(void) {
 		lv_label_set_text_fmt(led_trans_value, "%d ms", LED_TRANSITION_MIN_MS + (led_transition_index() * LED_TRANSITION_STEP_MS));
 	}
 
+	if (pill_effect_track) {
+		led_effect_t eff = led_get_effect();
+		settingsrow_pill_active(pill_effect_track, eff == LED_EFFECT_TRACK);
+		settingsrow_pill_active(pill_effect_breathe, eff == LED_EFFECT_BREATHE);
+		settingsrow_pill_active(pill_effect_rainbow, eff == LED_EFFECT_RAINBOW);
+	}
+
 	if (led_on) {
 		lv_obj_remove_state(led_off_switch, LV_STATE_DISABLED);
 		lv_obj_set_style_opa(led_off_card, LV_OPA_COVER, 0);
+		if (led_effect_card) {
+			lv_obj_set_style_opa(led_effect_card, LV_OPA_COVER, 0);
+		}
 	} else {
 		lv_obj_add_state(led_off_switch, LV_STATE_DISABLED);
 		lv_obj_set_style_opa(led_off_card, LV_OPA_40, 0);
+		if (led_effect_card) {
+			lv_obj_set_style_opa(led_effect_card, LV_OPA_40, 0);
+		}
 	}
 
 	set_checked(key_lock_switch, config_get_bool("power", "lock_keys_screen_off", false));
@@ -226,6 +242,14 @@ static void auto_off_changed_cb(lv_event_t *e) {
 	config_set_int("power", "auto_off_minutes", AUTO_OFF[index].minutes);
 	config_save();
 	powersettings_apply();
+	refresh_labels();
+}
+
+static void led_effect_pill_cb(lv_event_t *e) {
+	int mode = (int)(intptr_t)lv_event_get_user_data(e);
+	config_set_int("power", "led_effect", mode);
+	config_save();
+	led_set_effect((led_effect_t)mode);
 	refresh_labels();
 }
 
@@ -344,9 +368,14 @@ void powersettings_init(gui_config_t *cfg) {
 	// The LED master switch, and the standby option that depends on it.
 	settingsrow_toggle(container, "power_led_on", &led_on_switch, led_on_toggled_cb);
 
-	// The two effect controls, only where the controller can be driven directly.
+	// The effect controls, only where the controller can be driven directly.
 	// On the R1 the LED is a plain on/off light and neither means anything.
 	if (led_effects_available()) {
+		led_effect_card = settingsrow_pills(container, "power_led_effect", &led_effect_pills);
+		pill_effect_track = settingsrow_pill(led_effect_pills, "led_effect_track", (int)LED_EFFECT_TRACK, led_effect_pill_cb);
+		pill_effect_breathe = settingsrow_pill(led_effect_pills, "led_effect_breathe", (int)LED_EFFECT_BREATHE, led_effect_pill_cb);
+		pill_effect_rainbow = settingsrow_pill(led_effect_pills, "led_effect_rainbow", (int)LED_EFFECT_RAINBOW, led_effect_pill_cb);
+
 		settingsrow_slider(container, "power_led_brightness", LED_BRIGHTNESS_STEPS, &led_bright_value, &led_bright_slider,
 						   led_brightness_cb);
 		lv_slider_set_value(led_bright_slider, led_brightness_index(), LV_ANIM_OFF);

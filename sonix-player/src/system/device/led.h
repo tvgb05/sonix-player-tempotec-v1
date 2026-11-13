@@ -138,6 +138,19 @@ void led_set_brightness(int brightness);
 // fade-out or cross-fade takes. Only the direct path uses it.
 void led_set_transition_ms(int ms);
 
+// The LED effect modes for music playback:
+//   LED_EFFECT_TRACK   (default): Steady color determined by the sample rate/format
+//   LED_EFFECT_BREATHE: Breathing pulse in hardware with the track's color
+//   LED_EFFECT_RAINBOW: Continuous smooth cross-fade through the full RGB color spectrum
+typedef enum {
+	LED_EFFECT_TRACK = 0,
+	LED_EFFECT_BREATHE = 1,
+	LED_EFFECT_RAINBOW = 2,
+} led_effect_t;
+
+void led_set_effect(led_effect_t effect);
+led_effect_t led_get_effect(void);
+
 // Whether the fancy LED features (brightness, transition speed, the fades) are
 // available on this device -- true on the SGM31324, false on the R1 and the
 // host build. The settings page hides those rows when it is false.

@@ -92,6 +92,7 @@ typedef enum {
 	LM_BREATHE, // the controller's own breathing engine
 	LM_BLINK, // software on/off blink
 	LM_OFF, // dark, reached by a fade-out
+	LM_RAINBOW, // smooth continuous cycling through the RGB spectrum
 } led_mode_t;
 
 typedef struct {
@@ -124,6 +125,7 @@ static int red_trigger_state = -1; // -1 unknown, 0 "none", 1 "breathing"
 
 static int s_brightness = BRIGHTNESS_DEFAULT;
 static int s_transition_ms = TRANSITION_DEFAULT_MS;
+static led_effect_t s_led_effect = LED_EFFECT_TRACK;
 
 // The three inputs the pattern is resolved from. The charger wins over
 // everything -- the stock LED state machine applies its charging override
@@ -256,6 +258,51 @@ static bool led_wait(unsigned seen, int ms) {
 	return false;
 }
 
+static void hue_to_rgb(int hue, int *r, int *g, int *b) {
+	int h = hue % 360;
+	if (h < 0) {
+		h += 360;
+	}
+	int x = (h % 60) * 255 / 60;
+	switch (h / 60) {
+	case 0:
+		*r = 255;
+		*g = x;
+		*b = 0;
+		break;
+	case 1:
+		*r = 255 - x;
+		*g = 255;
+		*b = 0;
+		break;
+	case 2:
+		*r = 0;
+		*g = 255;
+		*b = x;
+		break;
+	case 3:
+		*r = 0;
+		*g = 255 - x;
+		*b = 255;
+		break;
+	case 4:
+		*r = x;
+		*g = 0;
+		*b = 255;
+		break;
+	case 5:
+		*r = 255;
+		*g = 0;
+		*b = 255 - x;
+		break;
+	default:
+		*r = 255;
+		*g = 255;
+		*b = 255;
+		break;
+	}
+}
+
 static void *led_worker(void *arg) {
 	(void)arg;
 	int cur_r = 0, cur_g = 0, cur_b = 0;
@@ -278,6 +325,25 @@ static void *led_worker(void *arg) {
 				cur_g = t.g;
 				cur_b = t.b;
 				cur_ch = ch_mask(t.r, t.g, t.b);
+			} else if (t.mode == LM_RAINBOW) {
+				led_i2c_steady();
+				int hue = 0;
+				for (;;) {
+					int r, g, b;
+					hue_to_rgb(hue, &r, &g, &b);
+					int out_r, out_g, out_b;
+					scale_rgb(r, g, b, false, &out_r, &out_g, &out_b);
+					unsigned ch = ch_mask(out_r, out_g, out_b);
+					led_i2c_levels(out_r, out_g, out_b, ch);
+					cur_r = out_r;
+					cur_g = out_g;
+					cur_b = out_b;
+					cur_ch = ch;
+					hue = (hue + 2) % 360;
+					if (led_wait(seen, 30)) {
+						break;
+					}
+				}
 			} else if (t.mode == LM_BLINK) {
 				unsigned ch = ch_mask(t.r, t.g, t.b);
 				led_i2c_steady();
@@ -476,6 +542,13 @@ static void build_render(led_state_t s, led_render_t *out) {
 		mode = LM_BREATHE;
 		break;
 	}
+	if ((s_playing || s_dac_streaming) && s != LS_CHARGING && s != LS_CHARGED && s != LS_OFF && s != LS_WIFI && s != LS_BT) {
+		if (s_led_effect == LED_EFFECT_RAINBOW) {
+			mode = LM_RAINBOW;
+		} else if (s_led_effect == LED_EFFECT_BREATHE) {
+			mode = LM_BREATHE;
+		}
+	}
 	scale_rgb(r, g, b, white, &out->r, &out->g, &out->b);
 	out->mode = mode;
 	out->period = 0x1E; // the stock charging pulse
@@ -614,6 +687,7 @@ void led_init(void) {
 	s_idle_off_enabled = config_get_bool("power", "led_off_standby", true);
 	s_brightness = (int)config_get_int("power", "led_brightness", BRIGHTNESS_DEFAULT);
 	s_transition_ms = (int)config_get_int("power", "led_transition_ms", TRANSITION_DEFAULT_MS);
+	s_led_effect = (led_effect_t)config_get_int("power", "led_effect", (int)LED_EFFECT_TRACK);
 
 	// On the SGM31324 (the V1 and the R3 Pro II) drive the controller directly
 	// -- that is what the fade-in below and the colour cross-fades need. The
@@ -749,6 +823,21 @@ void led_set_transition_ms(int ms) {
 		ms = TRANSITION_MAX_MS;
 	}
 	s_transition_ms = ms;
+}
+
+void led_set_effect(led_effect_t effect) {
+	if (effect == s_led_effect) {
+		return;
+	}
+	s_led_effect = effect;
+	if (direct_mode) {
+		current_state = -1;
+		apply();
+	}
+}
+
+led_effect_t led_get_effect(void) {
+	return s_led_effect;
 }
 
 bool led_effects_available(void) {
