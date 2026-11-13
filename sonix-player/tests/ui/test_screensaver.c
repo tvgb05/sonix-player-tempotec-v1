@@ -140,6 +140,13 @@ bool screensaverpics_pick(const char *current, int max_w, int max_h, char *out, 
 	folder_asks++;
 	return false;
 }
+bool screensaverpics_pick_lock(int max_w, int max_h, char *out, size_t out_size) {
+	(void)max_w;
+	(void)max_h;
+	(void)out;
+	(void)out_size;
+	return false;
+}
 const char *metadata_shown_artist(const song_metadata_t *m) { return m->artist; }
 
 /* ---- pictures, and the bookkeeping that catches a leak or a double free --- */

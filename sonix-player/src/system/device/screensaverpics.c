@@ -174,3 +174,63 @@ bool screensaverpics_pick(const char *current, int max_w, int max_h, char *out, 
 	out[0] = '\0';
 	return false;
 }
+
+bool screensaverpics_pick_lock(int max_w, int max_h, char *out, size_t out_size) {
+	if (!out || out_size == 0) {
+		return false;
+	}
+	out[0] = '\0';
+
+	const char *dir = screensaverpics_dir();
+	if (dir[0]) {
+		static const char *const preferred[] = {
+			"lock.jpg", "lock.jpeg",
+			"lockscreen.jpg", "lockscreen.jpeg",
+			"wallpaper.jpg", "wallpaper.jpeg"
+		};
+		for (size_t i = 0; i < sizeof(preferred) / sizeof(preferred[0]); i++) {
+			char path[PATH_MAX];
+			if (join_path(path, sizeof(path), dir, preferred[i])) {
+				if (screensaverpics_usable(dir, preferred[i], max_w, max_h)) {
+					snprintf(out, out_size, "%s", path);
+					return true;
+				}
+			}
+		}
+
+		DIR *d = opendir(dir);
+		if (d) {
+			struct dirent *e;
+			while ((e = readdir(d)) != NULL) {
+				if (candidate_name(e->d_name) && screensaverpics_usable(dir, e->d_name, max_w, max_h)) {
+					char path[PATH_MAX];
+					if (join_path(path, sizeof(path), dir, e->d_name)) {
+						snprintf(out, out_size, "%s", path);
+						closedir(d);
+						return true;
+					}
+				}
+			}
+			closedir(d);
+		}
+	}
+
+	static const char *const internal_paths[] = {
+		"/usr/data/lockscreen.jpeg",
+		"/usr/data/lockscreen.jpg",
+		"/usr/data/lock.jpg",
+		"/usr/data/lock.jpeg"
+	};
+	for (size_t i = 0; i < sizeof(internal_paths) / sizeof(internal_paths[0]); i++) {
+		if (access(internal_paths[i], F_OK) == 0) {
+			jpeg_info_t info;
+			if (jpeg_info_read(internal_paths[i], &info) && !info.progressive &&
+			    info.width <= max_w && info.height <= max_h && info.height >= info.width) {
+				snprintf(out, out_size, "%s", internal_paths[i]);
+				return true;
+			}
+		}
+	}
+
+	return false;
+}

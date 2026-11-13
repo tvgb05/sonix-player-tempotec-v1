@@ -342,7 +342,19 @@ static void check_folder(const char *tmp) {
 		assert(strcmp(base_name(out), "phone.JPG") == 0);
 	}
 
+	// Lock wallpaper pick: with only phone.JPG present, it falls back to it
+	assert(screensaverpics_pick_lock(480, 800, out, sizeof(out)));
+	assert(strcmp(base_name(out), "phone.JPG") == 0);
+
+	// Preferred lock.jpg name takes priority over other files
+	write_jpeg(folder, "lock.jpg", 480, 800, false, META_EDITOR);
+	assert(screensaverpics_pick_lock(480, 800, out, sizeof(out)));
+	assert(strcmp(base_name(out), "lock.jpg") == 0);
+	snprintf(path, sizeof(path), "%s/lock.jpg", folder);
+	assert(unlink(path) == 0);
+
 	screensaverpics_set_root(NULL);
+	assert(!screensaverpics_pick_lock(480, 800, out, sizeof(out)));
 }
 
 int main(void) {

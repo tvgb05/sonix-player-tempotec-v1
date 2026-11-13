@@ -51,4 +51,10 @@ bool screensaverpics_any(int max_w, int max_h);
 // empty.
 bool screensaverpics_pick(const char *current, int max_w, int max_h, char *out, size_t out_size);
 
+// Picks the lock wallpaper picture.
+// Prioritizes specific names (lock.jpg, lock.jpeg, lockscreen.jpg, lockscreen.jpeg,
+// wallpaper.jpg, wallpaper.jpeg) in the Screensaver folder, or /usr/data/lockscreen.jpeg,
+// or falls back to the first usable picture in the folder.
+bool screensaverpics_pick_lock(int max_w, int max_h, char *out, size_t out_size);
+
 #endif /* SCREENSAVERPICS_H */

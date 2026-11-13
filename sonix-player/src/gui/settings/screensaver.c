@@ -167,6 +167,7 @@ static cover_image_t next_pic, next_strip;
 static char next_file[512];
 static bool next_ready;	  // next_pic/next_strip hold a collected picture
 static bool next_pending; // a request is out with the loader
+static audio_status_t shown_status = AUDIO_STATUS_STOPPED;
 
 // ---------------------------------------------------------------------------
 // The Framed style
@@ -260,8 +261,9 @@ void screensaver_set_visualizer(bool on) {
 	config_set_bool("screen", "screensaver_visualizer", on);
 	config_save();
 	if (screensaver_is_visible()) {
-		visualizer_enable(on && spectrum_now() && power_screen_is_on());
-		if (spectrum_now()) lv_timer_resume(spectrum_timer); else { lv_timer_pause(spectrum_timer); spectrum_reset(); }
+		bool spec = spectrum_now() && spectrum_music_playing();
+		visualizer_enable(spec && power_screen_is_on());
+		if (spec) lv_timer_resume(spectrum_timer); else { lv_timer_pause(spectrum_timer); spectrum_reset(); }
 		refresh_content();
 	}
 }
@@ -297,15 +299,13 @@ void screensaver_set_source(screensaver_source_t chosen) {
 		// The framed copy belongs to the album source; a folder picture never
 		// needs it.
 		drop_frame();
-		// Asked for now rather than at the first screen-off, so the first wake
-		// after the option is chosen already has a picture to show.
-		request_next();
-	} else {
-		drop_next();
 	}
+	// Request the next picture: folder slideshow in Images, or lock wallpaper in Album
+	request_next();
 	if (screensaver_is_visible()) {
-		visualizer_enable(spectrum_now() && power_screen_is_on());
-		if (spectrum_now()) lv_timer_resume(spectrum_timer); else { lv_timer_pause(spectrum_timer); spectrum_reset(); }
+		bool spec = spectrum_now() && spectrum_music_playing();
+		visualizer_enable(spec && power_screen_is_on());
+		if (spec) lv_timer_resume(spectrum_timer); else { lv_timer_pause(spectrum_timer); spectrum_reset(); }
 		refresh_content();
 	}
 }
@@ -339,11 +339,17 @@ bool screensaver_has_images(void) { return screensaverpics_any(picture_max_w, pi
 // A no-op while one is already in hand or in flight, so the repeated wake-hook
 // calls cost nothing.
 static void request_next(void) {
-	if (source != SCREENSAVER_SOURCE_IMAGES || next_ready || next_pending) {
+	if (next_ready || next_pending) {
 		return;
 	}
 	char chosen[sizeof(next_file)];
-	if (!screensaverpics_pick(image_file, picture_max_w, picture_max_h, chosen, sizeof(chosen))) {
+	bool found = false;
+	if (source == SCREENSAVER_SOURCE_IMAGES) {
+		found = screensaverpics_pick(image_file, picture_max_w, picture_max_h, chosen, sizeof(chosen));
+	} else {
+		found = screensaverpics_pick_lock(picture_max_w, picture_max_h, chosen, sizeof(chosen));
+	}
+	if (!found) {
 		// The folder gave nothing at all -- emptied, or the card taken out.
 		// What is already up stays up: it is still a picture, and black is not.
 		return;
@@ -522,8 +528,14 @@ static void clock_timer_cb(lv_timer_t *timer) {
 	const void *cover = player_cover_image();
 
 	const char *now = state.live ? state.metadata.title : state.current_file;
-	if (framed_arrived || strcmp(now, shown_file) != 0 || cover != shown_cover) {
+	if (framed_arrived || strcmp(now, shown_file) != 0 || cover != shown_cover || state.status != shown_status) {
 		refresh_content(); // refreshes the clock on its way through
+		return;
+	}
+
+	if (!image_pic.pixels && next_ready) {
+		promote_next();
+		refresh_content();
 		return;
 	}
 
@@ -792,6 +804,8 @@ static void draw_from_folder(void) {
 static void refresh_content(void) {
 	device_state_t state;
 	device_state_get(&state);
+	shown_status = state.status;
+	bool is_playing = (state.status == AUDIO_STATUS_PLAYING);
 
 	// Recorded before anything is drawn from it, so what the tick above
 	// compares against is exactly what ended up on screen. A live stream has no
@@ -806,24 +820,29 @@ static void refresh_content(void) {
 		lv_image_set_src(cover_placeholder, state.live ? &icon_radio_player : &icon_music_note);
 	}
 
-	if (state.live) {
-		scrolltext_set(title_label, state.metadata.title);
-		scrolltext_set(artist_label, state.metadata.artist);
-	} else if (state.current_file[0]) {
-		const char *slash = strrchr(state.current_file, '/');
-		scrolltext_set(title_label, state.metadata.title[0] ? state.metadata.title
-															: (slash ? slash + 1 : state.current_file));
-		// A podcast episode has the show's own name in its artist field, because
-		// that is the line the player and the queue want under the episode. Here
-		// the line names the podcast's author instead, which only the sidecar
-		// knows -- and the player already reads it for its own star. Anything
-		// else, or an episode from a hand-copied file with no sidecar, keeps the
-		// artist the tags give.
-		podcast_feed_t feed;
-		const char *artist = player_current_podcast_feed(NULL, &feed) && feed.author[0]
-								? feed.author
-								: metadata_shown_artist(&state.metadata);
-		scrolltext_set(artist_label, artist);
+	if (is_playing) {
+		if (state.live) {
+			scrolltext_set(title_label, state.metadata.title);
+			scrolltext_set(artist_label, state.metadata.artist);
+		} else if (state.current_file[0]) {
+			const char *slash = strrchr(state.current_file, '/');
+			scrolltext_set(title_label, state.metadata.title[0] ? state.metadata.title
+																: (slash ? slash + 1 : state.current_file));
+			// A podcast episode has the show's own name in its artist field, because
+			// that is the line the player and the queue want under the episode. Here
+			// the line names the podcast's author instead, which only the sidecar
+			// knows -- and the player already reads it for its own star. Anything
+			// else, or an episode from a hand-copied file with no sidecar, keeps the
+			// artist the tags give.
+			podcast_feed_t feed;
+			const char *artist = player_current_podcast_feed(NULL, &feed) && feed.author[0]
+									? feed.author
+									: metadata_shown_artist(&state.metadata);
+			scrolltext_set(artist_label, artist);
+		} else {
+			scrolltext_set(title_label, "");
+			scrolltext_set(artist_label, "");
+		}
 	} else {
 		scrolltext_set(title_label, "");
 		scrolltext_set(artist_label, "");
@@ -834,27 +853,44 @@ static void refresh_content(void) {
 	// title -- it just must not change the picture.
 	shown_cover = player_cover_image();
 
-	if (!spectrum_now()) {
+	bool show_spectrum = spectrum_now() && is_playing;
+
+	if (!show_spectrum) {
 		lv_color_t page = (theme_is_monochrome() || theme_is_tokyo_night()) ? theme()->screen_bg : lv_color_black();
 		lv_obj_set_style_bg_color(saver, page, 0);
 	}
-	lv_obj_set_hidden(spectrum, !spectrum_now());
-	lv_obj_set_hidden(cover_box, spectrum_now());
-	if (spectrum_now()) {
+	lv_obj_set_hidden(spectrum, !show_spectrum);
+	lv_obj_set_hidden(cover_box, show_spectrum);
+	if (show_spectrum) {
 		set_page_backdrop(NULL);
 		lv_obj_set_style_bg_color(saver, lv_color_black(), 0);
 		spectrum_apply_backdrop();
-		spectrum_apply_idle(!spectrum_music_playing());
+		spectrum_apply_idle(false);
 		set_strip_height(DEFAULT_STRIP_H);
 		lv_obj_set_style_bg_image_src(info_strip, NULL, 0);
 		lv_obj_set_style_bg_opa(info_strip, LV_OPA_TRANSP, 0);
 		refresh_clock();
 		return;
+	} else if (spectrum_now()) {
+		visualizer_enable(false);
+		spectrum_reset();
 	}
 	if (source == SCREENSAVER_SOURCE_IMAGES) {
 		draw_from_folder();
 		refresh_clock();
 		return;
+	}
+
+	// Album mode: when music is NOT playing, display the lock wallpaper if one is ready
+	if (!is_playing) {
+		if (image_pic.pixels) {
+			draw_from_folder();
+			refresh_clock();
+			return;
+		}
+		if (!next_ready && !next_pending) {
+			request_next();
+		}
 	}
 
 	const lv_image_dsc_t *backdrop = player_backdrop_image();
@@ -922,7 +958,7 @@ void screensaver_show(void) {
 	lv_obj_set_hidden(saver, false);
 	lv_obj_move_foreground(saver);
 	lv_timer_resume(clock_timer);
-	if (spectrum_now()) { visualizer_enable(power_screen_is_on()); lv_timer_resume(spectrum_timer); }
+	if (spectrum_now() && spectrum_music_playing()) { visualizer_enable(power_screen_is_on()); lv_timer_resume(spectrum_timer); }
 }
 
 // Everything that has to happen once it is really gone, whether it was
@@ -995,7 +1031,7 @@ bool screensaver_prepare(void) {
 	// no decode, nothing between the button and the backlight.
 	bool waking = power_screen_is_on();
 	if (!waking) { visualizer_enable(false); spectrum_reset(); }
-	else if (spectrum_now()) visualizer_enable(true);
+	else if (spectrum_now() && spectrum_music_playing()) visualizer_enable(true);
 
 	if (screensaver_is_visible()) {
 		collect_next();
@@ -1032,18 +1068,18 @@ void screensaver_release_artwork(void) {
 	// so it puts the new track's picture up rather than leaving black.
 	shown_cover = NULL;
 	shown_file[0] = '\0';
-	// Whatever happens next, nothing here may still be pointing at the
-	// player's buffers when it frees them -- the page behind a framed sleeve
-	// included, which is the player's blurred copy.
-	lv_image_set_src(cover_img, NULL);
-	lv_obj_set_hidden(cover_img, true);
-	lv_obj_set_hidden(cover_placeholder, false);
-	set_info_strip_backdrop(NULL);
-	set_page_backdrop(NULL);
-	// The player only lets go of a picture that is changing, so the framed
-	// copy of it is out of date, and so is any copy still on its way. Both go;
-	// the redraw asks for the next one once the player has it.
 	drop_frame();
+
+	if (spectrum_music_playing()) {
+		// Whatever happens next, nothing here may still be pointing at the
+		// player's buffers when it frees them -- the page behind a framed sleeve
+		// included, which is the player's blurred copy.
+		lv_image_set_src(cover_img, NULL);
+		lv_obj_set_hidden(cover_img, true);
+		lv_obj_set_hidden(cover_placeholder, false);
+		set_info_strip_backdrop(NULL);
+		set_page_backdrop(NULL);
+	}
 }
 
 void screensaver_hide(void) {
