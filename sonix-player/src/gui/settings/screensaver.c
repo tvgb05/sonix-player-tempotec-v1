@@ -287,6 +287,7 @@ void screensaver_set_visualizer_style(screensaver_viz_style_t chosen) {
 }
 
 static void request_next(void);
+static void promote_next(void);
 static void drop_next(void);
 static void drop_frame(void);
 static void refresh_content(void);
