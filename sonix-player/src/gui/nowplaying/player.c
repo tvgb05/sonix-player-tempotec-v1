@@ -6132,6 +6132,15 @@ static void handle_track_finished(void) {
 		return;
 	}
 
+	if (sleeptimer_stop_at_album_end() && playlist_at_end()) {
+		fprintf(stderr, "player: end of album reached under sleep timer; stopping\n");
+		sleeptimer_set_stop_at_album_end(false);
+		audio_pause();
+		apply_playback_status(AUDIO_STATUS_PAUSED);
+		refresh_now_playing();
+		return;
+	}
+
 	if (device_state_advance_auto(NULL, 0)) {
 		refresh_now_playing();
 	}

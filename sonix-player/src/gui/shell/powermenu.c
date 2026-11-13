@@ -18,6 +18,7 @@
 #include "src/system/device/led.h"
 #include "src/system/audio/audio.h"
 #include "src/system/playback/device_state.h"
+#include "src/system/playback/sleeptimer.h"
 #include "src/system/core/lang.h"
 #include "src/system/device/power.h"
 #include "src/system/device/system.h"
@@ -28,29 +29,20 @@
 #include "src/system/streaming/radio.h"
 
 // ---------------------------------------------------------------------------
-// The power menu, iOS-style: two slide-to-confirm pills over a near-opaque
-// black veil, and a round cancel button at the bottom that turns red under the
-// finger. Sliding is the point: powering off a music player in a pocket must
-// take a deliberate gesture, not a stray tap.
+// The power menu: iOS-style slide-to-confirm pills, a Sleep Timer card with
+// quick preset buttons (10, 30, 60, 120, Album), slider bar and +/- buttons,
+// and a round cancel button at the bottom.
 // ---------------------------------------------------------------------------
 
-// All of the geometry through bp_pick(): the 480-px HiBy layout keeps its
-// numbers, and the 240x320 TempoTec V1 gets a pill that actually fits the
-// panel.  On the V1 the old fixed 380-px pill hung 140 px past the right edge,
-// so the knob could never be dragged to the commit point: the power menu
-// could neither shut down nor reboot the player.
 #define SLIDE_WIDTH bp_pick(216, 380)
-#define SLIDE_HEIGHT bp_pick(52, 76)
-#define SLIDE_KNOB bp_pick(44, 64)
+#define SLIDE_HEIGHT bp_pick(44, 66)
+#define SLIDE_KNOB bp_pick(38, 56)
 // How far along (as a fraction of the track) the knob has to be on release.
 #define SLIDE_COMMIT_PCT 88
 
-// Horizontal inset of the knob's travel: LVGL runs the knob's CENTRE from
-// edge to edge, which hangs half of it outside the pill at both ends. Padding
-// the track by half a knob (plus a hair of margin) keeps it inside.
 #define SLIDE_INSET (SLIDE_KNOB / 2 + 6)
 
-#define CANCEL_SIZE bp_pick(52, 76)
+#define CANCEL_SIZE bp_pick(38, 54)
 
 static lv_obj_t *panel;
 
@@ -66,6 +58,180 @@ typedef struct {
 static slide_t slide_off;
 static slide_t slide_reboot;
 
+static lv_obj_t *sleep_card;
+static lv_obj_t *sleep_status_label;
+static lv_obj_t *sleep_slider;
+static lv_obj_t *preset_btns[5];
+static lv_obj_t *preset_labels[5];
+static lv_timer_t *sleep_poll_timer;
+
+static const int SLEEP_PRESETS[4] = {10, 30, 60, 120};
+
+static void update_preset_highlights(int current_minutes, bool is_album) {
+	for (int i = 0; i < 4; i++) {
+		bool match = !is_album && (current_minutes == SLEEP_PRESETS[i]);
+		lv_obj_set_style_bg_color(preset_btns[i], lv_color_white(), 0);
+		lv_obj_set_style_bg_opa(preset_btns[i], match ? LV_OPA_COVER : LV_OPA_20, 0);
+		lv_obj_set_style_text_color(preset_labels[i], match ? lv_color_black() : lv_color_white(), 0);
+	}
+	lv_obj_set_style_bg_color(preset_btns[4], lv_color_white(), 0);
+	lv_obj_set_style_bg_opa(preset_btns[4], is_album ? LV_OPA_COVER : LV_OPA_20, 0);
+	lv_obj_set_style_text_color(preset_labels[4], is_album ? lv_color_black() : lv_color_white(), 0);
+}
+
+static void sleep_card_refresh(void) {
+	if (!panel || !sleep_status_label || !sleep_slider) {
+		return;
+	}
+	sleeptimer_kind_t kind = sleeptimer_current_kind();
+	bool is_album = sleeptimer_stop_at_album_end();
+	bool running = sleeptimer_running(kind);
+	bool enabled = sleeptimer_enabled(kind);
+	int mins = sleeptimer_minutes(kind);
+	int rem_sec = sleeptimer_remaining(kind);
+
+	if (is_album) {
+		lv_label_set_text(sleep_status_label, "Sleep: End of album");
+		lv_slider_set_value(sleep_slider, 0, LV_ANIM_OFF);
+		update_preset_highlights(0, true);
+	} else if (running && rem_sec > 0) {
+		int rem_min = (rem_sec + 59) / 60;
+		char buf[48];
+		snprintf(buf, sizeof(buf), "Sleep: %d min left", rem_min);
+		lv_label_set_text(sleep_status_label, buf);
+		lv_slider_set_value(sleep_slider, rem_min > 120 ? 120 : rem_min, LV_ANIM_OFF);
+		update_preset_highlights(mins, false);
+	} else if (enabled && mins > 0) {
+		char buf[48];
+		snprintf(buf, sizeof(buf), "Sleep: %d min", mins);
+		lv_label_set_text(sleep_status_label, buf);
+		lv_slider_set_value(sleep_slider, mins > 120 ? 120 : mins, LV_ANIM_OFF);
+		update_preset_highlights(mins, false);
+	} else {
+		lv_label_set_text(sleep_status_label, "Sleep: Off");
+		lv_slider_set_value(sleep_slider, 0, LV_ANIM_OFF);
+		update_preset_highlights(0, false);
+	}
+}
+
+static void sleep_poll_cb(lv_timer_t *t) {
+	(void)t;
+	if (powermenu_is_open()) {
+		sleeptimer_kind_t kind = sleeptimer_current_kind();
+		if (sleeptimer_running(kind) && !sleeptimer_stop_at_album_end()) {
+			sleep_card_refresh();
+		}
+	}
+}
+
+static void off_click_cb(lv_event_t *e) {
+	(void)e;
+	sleeptimer_kind_t kind = sleeptimer_current_kind();
+	sleeptimer_set_stop_at_album_end(false);
+	sleeptimer_set_enabled(kind, false);
+	sleeptimer_set_minutes(kind, 0);
+	sleep_card_refresh();
+}
+
+static void preset_click_cb(lv_event_t *e) {
+	int idx = (int)(intptr_t)lv_event_get_user_data(e);
+	sleeptimer_kind_t kind = sleeptimer_current_kind();
+	if (idx >= 0 && idx < 4) {
+		int target = SLEEP_PRESETS[idx];
+		if (!sleeptimer_stop_at_album_end() && sleeptimer_enabled(kind) && sleeptimer_minutes(kind) == target) {
+			// Toggle off if already matching
+			sleeptimer_set_enabled(kind, false);
+			sleeptimer_set_minutes(kind, 0);
+		} else {
+			sleeptimer_set_stop_at_album_end(false);
+			sleeptimer_set_minutes(kind, target);
+			sleeptimer_set_enabled(kind, true);
+		}
+	} else if (idx == 4) {
+		// Album mode
+		if (sleeptimer_stop_at_album_end()) {
+			sleeptimer_set_stop_at_album_end(false);
+		} else {
+			sleeptimer_set_enabled(kind, false);
+			sleeptimer_set_stop_at_album_end(true);
+		}
+	}
+	sleep_card_refresh();
+}
+
+static void step_minus_cb(lv_event_t *e) {
+	(void)e;
+	sleeptimer_kind_t kind = sleeptimer_current_kind();
+	if (sleeptimer_stop_at_album_end()) {
+		sleeptimer_set_stop_at_album_end(false);
+		sleep_card_refresh();
+		return;
+	}
+	int mins = sleeptimer_enabled(kind) ? sleeptimer_minutes(kind) : 0;
+	if (mins <= 5) {
+		mins = 0;
+	} else if (mins <= 30) {
+		mins -= 5;
+	} else {
+		mins -= 10;
+	}
+	if (mins <= 0) {
+		sleeptimer_set_enabled(kind, false);
+		sleeptimer_set_minutes(kind, 0);
+	} else {
+		sleeptimer_set_minutes(kind, mins);
+		sleeptimer_set_enabled(kind, true);
+	}
+	sleep_card_refresh();
+}
+
+static void step_plus_cb(lv_event_t *e) {
+	(void)e;
+	sleeptimer_kind_t kind = sleeptimer_current_kind();
+	sleeptimer_set_stop_at_album_end(false);
+	int mins = sleeptimer_enabled(kind) ? sleeptimer_minutes(kind) : 0;
+	if (mins <= 0) {
+		mins = 10;
+	} else if (mins < 30) {
+		mins += 5;
+	} else {
+		mins += 10;
+	}
+	if (mins > 120) {
+		mins = 120;
+	}
+	sleeptimer_set_minutes(kind, mins);
+	sleeptimer_set_enabled(kind, true);
+	sleep_card_refresh();
+}
+
+static void slider_event_cb(lv_event_t *e) {
+	lv_event_code_t code = lv_event_get_code(e);
+	sleeptimer_kind_t kind = sleeptimer_current_kind();
+	int val = lv_slider_get_value(sleep_slider);
+
+	if (code == LV_EVENT_VALUE_CHANGED) {
+		if (val > 0) {
+			char buf[32];
+			snprintf(buf, sizeof(buf), "Sleep: %d min", val);
+			lv_label_set_text(sleep_status_label, buf);
+		} else {
+			lv_label_set_text(sleep_status_label, "Sleep: Off");
+		}
+		update_preset_highlights(val, false);
+	} else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+		sleeptimer_set_stop_at_album_end(false);
+		if (val > 0) {
+			sleeptimer_set_minutes(kind, val);
+			sleeptimer_set_enabled(kind, true);
+		} else {
+			sleeptimer_set_enabled(kind, false);
+			sleeptimer_set_minutes(kind, 0);
+		}
+		sleep_card_refresh();
+	}
+}
+
 void powermenu_refresh_labels(void) {
 	if (slide_off.label) {
 		lv_label_set_text(slide_off.label, tr("powermenu_slide_to_power_off"));
@@ -73,6 +239,7 @@ void powermenu_refresh_labels(void) {
 	if (slide_reboot.label) {
 		lv_label_set_text(slide_reboot.label, tr("powermenu_slide_to_restart"));
 	}
+	sleep_card_refresh();
 }
 
 bool powermenu_is_open(void) { return panel && !lv_obj_is_hidden(panel); }
@@ -90,6 +257,10 @@ void powermenu_show(void) {
 
 	slide_reset(&slide_off);
 	slide_reset(&slide_reboot);
+	sleep_card_refresh();
+	if (sleep_poll_timer) {
+		lv_timer_resume(sleep_poll_timer);
+	}
 
 	lv_obj_set_hidden(panel, false);
 	lv_obj_move_foreground(panel);
@@ -97,6 +268,9 @@ void powermenu_show(void) {
 }
 
 static void hide(void) {
+	if (sleep_poll_timer) {
+		lv_timer_pause(sleep_poll_timer);
+	}
 	if (panel) {
 		lv_obj_set_hidden(panel, true);
 	}
@@ -266,11 +440,7 @@ static void make_slide(lv_obj_t *parent, slide_t *s, const lv_image_dsc_t *icon,
 	// itself cannot hold children).
 	s->knob_icon = lv_image_create(s->pill);
 	lv_image_set_src(s->knob_icon, icon);
-	// A touch smaller than the raw 56 px bitmap, so the disc keeps a clear
-	// rim around the glyph. Scaling happens about the centre, so the
-	// centring maths below is unaffected. The compact knob is 44 px, so its
-	// glyph shrinks further to keep the same rim.
-	lv_image_set_scale(s->knob_icon, (uint32_t)bp_pick(137, 200)); // ~30 px / ~44 px
+	lv_image_set_scale(s->knob_icon, (uint32_t)bp_pick(120, 180));
 	s->knob_icon_w = (int)icon->header.w;
 	lv_obj_set_style_image_recolor(s->knob_icon, icon_tint, 0);
 	lv_obj_set_style_image_recolor_opa(s->knob_icon, LV_OPA_COVER, 0);
@@ -293,29 +463,167 @@ void powermenu_init(gui_config_t *cfg) {
 	lv_obj_set_scrollable(panel, false);
 	lv_obj_set_hidden(panel, true);
 
-	// The two pills, upper third of the screen, like the real thing.
+	// The two pills, upper section of the screen
 	lv_obj_t *pills = lv_obj_create(panel);
 	lv_obj_set_size(pills, lv_pct(100), LV_SIZE_CONTENT);
-	lv_obj_align(pills, LV_ALIGN_TOP_MID, 0, cfg->top_bar_height + bp_pick(28, 70));
+	lv_obj_align(pills, LV_ALIGN_TOP_MID, 0, bp_pick(10, 20));
 	lv_obj_set_style_bg_opa(pills, 0, 0);
 	lv_obj_set_style_border_width(pills, 0, 0);
 	lv_obj_set_style_pad_all(pills, 0, 0);
-	lv_obj_set_style_pad_gap(pills, bp_pick(16, 26), 0);
+	lv_obj_set_style_pad_gap(pills, bp_pick(6, 12), 0);
 	lv_obj_set_scrollable(pills, false);
 	lv_obj_set_flex_flow(pills, LV_FLEX_FLOW_COLUMN);
 	lv_obj_set_flex_align(pills, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
 	make_slide(pills, &slide_off, &icon_power_off, lv_color_make(224, 27, 36), "powermenu_slide_to_power_off", do_power_off);
-	// A fixed blue, deliberately not the accent: the two slides are power off
-	// (red) and reboot (blue), and an accent set to red or orange would make
-	// them impossible to tell apart at a glance.
 	make_slide(pills, &slide_reboot, &icon_reboot, lv_color_make(0, 122, 255), "powermenu_slide_to_restart", do_reboot);
 
-	// Cancel: a round button at the bottom centre that goes red under the
-	// finger, with its label floating underneath.
+	// Sleep timer card
+	sleep_card = lv_obj_create(panel);
+	lv_obj_set_size(sleep_card, SLIDE_WIDTH, bp_pick(126, 170));
+	lv_obj_align(sleep_card, LV_ALIGN_TOP_MID, 0, bp_pick(108, 170));
+	lv_obj_set_style_radius(sleep_card, 16, 0);
+	lv_obj_set_style_bg_color(sleep_card, lv_color_white(), 0);
+	lv_obj_set_style_bg_opa(sleep_card, LV_OPA_15, 0);
+	lv_obj_set_style_border_width(sleep_card, 0, 0);
+	lv_obj_set_style_pad_hor(sleep_card, bp_pick(8, 14), 0);
+	lv_obj_set_style_pad_ver(sleep_card, bp_pick(6, 10), 0);
+	lv_obj_set_scrollable(sleep_card, false);
+
+	// Header row
+	lv_obj_t *top_row = lv_obj_create(sleep_card);
+	lv_obj_set_size(top_row, lv_pct(100), bp_pick(24, 32));
+	lv_obj_set_style_bg_opa(top_row, 0, 0);
+	lv_obj_set_style_border_width(top_row, 0, 0);
+	lv_obj_set_style_pad_all(top_row, 0, 0);
+	lv_obj_set_scrollable(top_row, false);
+	lv_obj_align(top_row, LV_ALIGN_TOP_MID, 0, 0);
+
+	lv_obj_t *sleep_icon = lv_image_create(top_row);
+	lv_image_set_src(sleep_icon, &icon_sleep_music_quick);
+	lv_image_set_scale(sleep_icon, (uint32_t)bp_pick(90, 130));
+	lv_obj_set_style_image_recolor(sleep_icon, lv_color_white(), 0);
+	lv_obj_set_style_image_recolor_opa(sleep_icon, LV_OPA_COVER, 0);
+	lv_obj_align(sleep_icon, LV_ALIGN_LEFT_MID, 0, 0);
+
+	sleep_status_label = lv_label_create(top_row);
+	lv_label_set_text(sleep_status_label, "Sleep: Off");
+	lv_obj_set_style_text_font(sleep_status_label, &font_ui_16, 0);
+	lv_obj_set_style_text_color(sleep_status_label, lv_color_white(), 0);
+	lv_obj_align(sleep_status_label, LV_ALIGN_LEFT_MID, bp_pick(22, 34), 0);
+
+	lv_obj_t *off_btn = lv_btn_create(top_row);
+	lv_obj_set_size(off_btn, bp_pick(36, 50), bp_pick(20, 26));
+	lv_obj_align(off_btn, LV_ALIGN_RIGHT_MID, 0, 0);
+	lv_obj_set_style_radius(off_btn, LV_RADIUS_CIRCLE, 0);
+	lv_obj_set_style_bg_color(off_btn, lv_color_white(), 0);
+	lv_obj_set_style_bg_opa(off_btn, LV_OPA_20, 0);
+	lv_obj_set_style_bg_opa(off_btn, LV_OPA_50, LV_STATE_PRESSED);
+	lv_obj_set_style_pad_all(off_btn, 0, 0);
+	lv_obj_add_event_cb(off_btn, off_click_cb, LV_EVENT_CLICKED, NULL);
+
+	lv_obj_t *off_lbl = lv_label_create(off_btn);
+	lv_label_set_text(off_lbl, "Off");
+	lv_obj_set_style_text_font(off_lbl, &font_ui_14, 0);
+	lv_obj_set_style_text_color(off_lbl, lv_color_white(), 0);
+	lv_obj_center(off_lbl);
+
+	// Presets row
+	lv_obj_t *presets_row = lv_obj_create(sleep_card);
+	lv_obj_set_size(presets_row, lv_pct(100), bp_pick(26, 34));
+	lv_obj_align(presets_row, LV_ALIGN_TOP_MID, 0, bp_pick(28, 38));
+	lv_obj_set_style_bg_opa(presets_row, 0, 0);
+	lv_obj_set_style_border_width(presets_row, 0, 0);
+	lv_obj_set_style_pad_all(presets_row, 0, 0);
+	lv_obj_set_flex_flow(presets_row, LV_FLEX_FLOW_ROW);
+	lv_obj_set_flex_align(presets_row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+	lv_obj_set_scrollable(presets_row, false);
+
+	static const char *preset_texts[5] = {"10m", "30m", "60m", "120m", "Album"};
+	int preset_widths[5] = {bp_pick(32, 56), bp_pick(32, 56), bp_pick(32, 56), bp_pick(38, 64), bp_pick(52, 80)};
+
+	for (int i = 0; i < 5; i++) {
+		preset_btns[i] = lv_btn_create(presets_row);
+		lv_obj_set_size(preset_btns[i], preset_widths[i], bp_pick(24, 32));
+		lv_obj_set_style_radius(preset_btns[i], LV_RADIUS_CIRCLE, 0);
+		lv_obj_set_style_bg_color(preset_btns[i], lv_color_white(), 0);
+		lv_obj_set_style_bg_opa(preset_btns[i], LV_OPA_20, 0);
+		lv_obj_set_style_pad_all(preset_btns[i], 0, 0);
+		lv_obj_add_event_cb(preset_btns[i], preset_click_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+
+		preset_labels[i] = lv_label_create(preset_btns[i]);
+		lv_label_set_text(preset_labels[i], preset_texts[i]);
+		lv_obj_set_style_text_font(preset_labels[i], &font_ui_14, 0);
+		lv_obj_set_style_text_color(preset_labels[i], lv_color_white(), 0);
+		lv_obj_center(preset_labels[i]);
+	}
+
+	// Stepper & Slider row
+	lv_obj_t *ctrl_row = lv_obj_create(sleep_card);
+	lv_obj_set_size(ctrl_row, lv_pct(100), bp_pick(36, 48));
+	lv_obj_align(ctrl_row, LV_ALIGN_BOTTOM_MID, 0, bp_pick(-2, -4));
+	lv_obj_set_style_bg_opa(ctrl_row, 0, 0);
+	lv_obj_set_style_border_width(ctrl_row, 0, 0);
+	lv_obj_set_style_pad_all(ctrl_row, 0, 0);
+	lv_obj_set_flex_flow(ctrl_row, LV_FLEX_FLOW_ROW);
+	lv_obj_set_flex_align(ctrl_row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+	lv_obj_set_scrollable(ctrl_row, false);
+
+	// Minus button
+	lv_obj_t *btn_minus = lv_btn_create(ctrl_row);
+	lv_obj_set_size(btn_minus, bp_pick(30, 42), bp_pick(30, 42));
+	lv_obj_set_style_radius(btn_minus, LV_RADIUS_CIRCLE, 0);
+	lv_obj_set_style_bg_color(btn_minus, lv_color_white(), 0);
+	lv_obj_set_style_bg_opa(btn_minus, LV_OPA_25, 0);
+	lv_obj_set_style_bg_opa(btn_minus, LV_OPA_60, LV_STATE_PRESSED);
+	lv_obj_set_style_pad_all(btn_minus, 0, 0);
+	lv_obj_add_event_cb(btn_minus, step_minus_cb, LV_EVENT_CLICKED, NULL);
+
+	lv_obj_t *lbl_minus = lv_label_create(btn_minus);
+	lv_label_set_text(lbl_minus, "-");
+	lv_obj_set_style_text_font(lbl_minus, &font_ui_20_bold, 0);
+	lv_obj_set_style_text_color(lbl_minus, lv_color_white(), 0);
+	lv_obj_center(lbl_minus);
+
+	// Slider
+	sleep_slider = lv_slider_create(ctrl_row);
+	lv_obj_set_size(sleep_slider, bp_pick(118, 240), bp_pick(12, 18));
+	lv_slider_set_range(sleep_slider, 0, 120);
+	lv_slider_set_value(sleep_slider, 0, LV_ANIM_OFF);
+	lv_obj_set_style_radius(sleep_slider, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+	lv_obj_set_style_bg_color(sleep_slider, lv_color_white(), LV_PART_MAIN);
+	lv_obj_set_style_bg_opa(sleep_slider, LV_OPA_20, LV_PART_MAIN);
+
+	lv_obj_set_style_radius(sleep_slider, LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
+	lv_obj_set_style_bg_color(sleep_slider, lv_color_white(), LV_PART_INDICATOR);
+	lv_obj_set_style_bg_opa(sleep_slider, LV_OPA_70, LV_PART_INDICATOR);
+
+	lv_obj_set_style_radius(sleep_slider, LV_RADIUS_CIRCLE, LV_PART_KNOB);
+	lv_obj_set_style_bg_color(sleep_slider, lv_color_white(), LV_PART_KNOB);
+	lv_obj_set_style_bg_opa(sleep_slider, LV_OPA_COVER, LV_PART_KNOB);
+	lv_obj_set_style_pad_all(sleep_slider, bp_pick(4, 6), LV_PART_KNOB);
+	lv_obj_add_event_cb(sleep_slider, slider_event_cb, LV_EVENT_ALL, NULL);
+
+	// Plus button
+	lv_obj_t *btn_plus = lv_btn_create(ctrl_row);
+	lv_obj_set_size(btn_plus, bp_pick(30, 42), bp_pick(30, 42));
+	lv_obj_set_style_radius(btn_plus, LV_RADIUS_CIRCLE, 0);
+	lv_obj_set_style_bg_color(btn_plus, lv_color_white(), 0);
+	lv_obj_set_style_bg_opa(btn_plus, LV_OPA_25, 0);
+	lv_obj_set_style_bg_opa(btn_plus, LV_OPA_60, LV_STATE_PRESSED);
+	lv_obj_set_style_pad_all(btn_plus, 0, 0);
+	lv_obj_add_event_cb(btn_plus, step_plus_cb, LV_EVENT_CLICKED, NULL);
+
+	lv_obj_t *lbl_plus = lv_label_create(btn_plus);
+	lv_label_set_text(lbl_plus, "+");
+	lv_obj_set_style_text_font(lbl_plus, &font_ui_20_bold, 0);
+	lv_obj_set_style_text_color(lbl_plus, lv_color_white(), 0);
+	lv_obj_center(lbl_plus);
+
+	// Cancel button at bottom
 	lv_obj_t *cancel = lv_btn_create(panel);
 	lv_obj_set_size(cancel, CANCEL_SIZE, CANCEL_SIZE);
-	lv_obj_align(cancel, LV_ALIGN_BOTTOM_MID, 0, bp_pick(-58, -84));
+	lv_obj_align(cancel, LV_ALIGN_BOTTOM_MID, 0, bp_pick(-10, -20));
 	lv_obj_set_style_radius(cancel, LV_RADIUS_CIRCLE, 0);
 	lv_obj_set_style_bg_color(cancel, lv_color_white(), 0);
 	lv_obj_set_style_bg_opa(cancel, LV_OPA_30, 0);
@@ -327,14 +635,11 @@ void powermenu_init(gui_config_t *cfg) {
 
 	lv_obj_t *cancel_icon = lv_image_create(cancel);
 	lv_image_set_src(cancel_icon, &icon_close);
+	lv_image_set_scale(cancel_icon, (uint32_t)bp_pick(120, 180));
 	lv_obj_set_style_image_recolor(cancel_icon, lv_color_white(), 0);
 	lv_obj_set_style_image_recolor_opa(cancel_icon, LV_OPA_COVER, 0);
 	lv_obj_center(cancel_icon);
 
-	lv_obj_t *cancel_label = lv_label_create(panel);
-	lv_label_set_text(cancel_label, tr("cancel"));
-	lv_obj_set_style_text_font(cancel_label, &font_ui_24, 0);
-	lv_obj_set_style_text_color(cancel_label, lv_color_white(), 0);
-	lv_obj_align(cancel_label, LV_ALIGN_BOTTOM_MID, 0, bp_pick(-28, -44));
-
+	sleep_poll_timer = lv_timer_create(sleep_poll_cb, 1000, NULL);
+	lv_timer_pause(sleep_poll_timer);
 }

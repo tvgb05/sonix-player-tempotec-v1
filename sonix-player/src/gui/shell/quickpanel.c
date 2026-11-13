@@ -2743,6 +2743,9 @@ static void sonixlink_clicked_cb(lv_event_t *e) {
 // ---------------------------------------------------------------------------
 
 static bool sleep_timer_armed(sleeptimer_kind_t kind) {
+	if (kind == SLEEPTIMER_MUSIC && sleeptimer_stop_at_album_end()) {
+		return true;
+	}
 	return sleeptimer_enabled(kind) && sleeptimer_minutes(kind) > 0;
 }
 
@@ -2752,7 +2755,9 @@ static void sleep_timer_clicked(sleeptimer_kind_t kind) {
 		return;
 	}
 
-	if (sleeptimer_enabled(kind)) {
+	if (kind == SLEEPTIMER_MUSIC && sleeptimer_stop_at_album_end()) {
+		sleeptimer_set_stop_at_album_end(false);
+	} else if (sleeptimer_enabled(kind)) {
 		sleeptimer_set_enabled(kind, false);
 	} else if (sleeptimer_minutes(kind) > 0) {
 		sleeptimer_set_enabled(kind, true);

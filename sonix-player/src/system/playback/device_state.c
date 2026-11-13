@@ -8,6 +8,7 @@
 #include "src/system/library/library.h"
 #include "src/system/library/metadata.h"
 #include "src/system/playback/playlist.h"
+#include "src/system/playback/sleeptimer.h"
 #include "src/system/streaming/podcast.h"
 #include "src/system/streaming/podcastcache.h"
 #include "src/system/streaming/qobuzcache.h"
@@ -1183,6 +1184,11 @@ bool device_state_advance_auto(char *out_path, size_t out_size) {
 
 	char path[512];
 	playlist_resync_to_current();
+
+	if (sleeptimer_stop_at_album_end() && playlist_at_end()) {
+		sleeptimer_set_stop_at_album_end(false);
+		return false;
+	}
 
 	// The end of a record or of a folder, asked before the queue is advanced
 	// rather than after it fails to advance.

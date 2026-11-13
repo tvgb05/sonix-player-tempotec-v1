@@ -66,4 +66,11 @@ bool sleeptimer_expired(sleeptimer_kind_t kind);
 // What is left of that stretch, in seconds, or 0 when it is not counting.
 int sleeptimer_remaining(sleeptimer_kind_t kind);
 
+// Stop after current album / playlist finishes.
+bool sleeptimer_stop_at_album_end(void);
+void sleeptimer_set_stop_at_album_end(bool on);
+
+// Which kind is currently playing, or SLEEPTIMER_MUSIC if none.
+sleeptimer_kind_t sleeptimer_current_kind(void);
+
 #endif /* SLEEPTIMER_H */

@@ -34,6 +34,7 @@ typedef struct {
 } timer_state_t;
 
 static timer_state_t timers[SLEEPTIMER_COUNT];
+static bool stop_at_album = false;
 
 // Which kind is playing, kept apart from the countdowns: "something is playing"
 // and "a stretch is running" are not the same thing, and folding them into one
@@ -64,6 +65,7 @@ void sleeptimer_init(void) {
 		timers[i].counting = false;
 		timers[i].remaining_ms = 0;
 	}
+	stop_at_album = config_get_int("player", "sleep_album_end", 0) != 0;
 	playing_kind = SLEEPTIMER_COUNT;
 }
 
@@ -88,6 +90,10 @@ void sleeptimer_set_enabled(sleeptimer_kind_t kind, bool on) {
 	if (!in_range(kind) || on == timers[kind].enabled) {
 		return;
 	}
+	if (on && stop_at_album) {
+		stop_at_album = false;
+		config_set_int("player", "sleep_album_end", 0);
+	}
 	timers[kind].enabled = on;
 	config_set_int(PROFILES[kind].section, PROFILES[kind].key_on, on ? 1 : 0);
 	config_save();
@@ -104,6 +110,10 @@ void sleeptimer_set_minutes(sleeptimer_kind_t kind, int minutes) {
 	minutes = clamp_minutes(minutes);
 	if (minutes == timers[kind].minutes) {
 		return;
+	}
+	if (stop_at_album) {
+		stop_at_album = false;
+		config_set_int("player", "sleep_album_end", 0);
 	}
 	timers[kind].minutes = minutes;
 	config_set_int(PROFILES[kind].section, PROFILES[kind].key_minutes, minutes);
@@ -171,4 +181,28 @@ int sleeptimer_remaining(sleeptimer_kind_t kind) {
 		return 0;
 	}
 	return (int)((timers[kind].remaining_ms + 999) / 1000);
+}
+
+bool sleeptimer_stop_at_album_end(void) {
+	return stop_at_album;
+}
+
+void sleeptimer_set_stop_at_album_end(bool on) {
+	if (stop_at_album == on) {
+		return;
+	}
+	stop_at_album = on;
+	config_set_int("player", "sleep_album_end", on ? 1 : 0);
+	config_save();
+	if (on) {
+		timers[SLEEPTIMER_MUSIC].enabled = false;
+		restart(SLEEPTIMER_MUSIC);
+	}
+}
+
+sleeptimer_kind_t sleeptimer_current_kind(void) {
+	if (in_range(playing_kind)) {
+		return playing_kind;
+	}
+	return SLEEPTIMER_MUSIC;
 }
