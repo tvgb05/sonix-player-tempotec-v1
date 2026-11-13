@@ -35,14 +35,14 @@
 // ---------------------------------------------------------------------------
 
 #define SLIDE_WIDTH bp_pick(216, 380)
-#define SLIDE_HEIGHT bp_pick(44, 66)
-#define SLIDE_KNOB bp_pick(38, 56)
+#define SLIDE_HEIGHT bp_pick(48, 70)
+#define SLIDE_KNOB bp_pick(42, 60)
 // How far along (as a fraction of the track) the knob has to be on release.
 #define SLIDE_COMMIT_PCT 88
 
 #define SLIDE_INSET (SLIDE_KNOB / 2 + 6)
 
-#define CANCEL_SIZE bp_pick(38, 54)
+#define CANCEL_SIZE bp_pick(48, 68)
 
 static lv_obj_t *panel;
 
@@ -440,7 +440,7 @@ static void make_slide(lv_obj_t *parent, slide_t *s, const lv_image_dsc_t *icon,
 	// itself cannot hold children).
 	s->knob_icon = lv_image_create(s->pill);
 	lv_image_set_src(s->knob_icon, icon);
-	lv_image_set_scale(s->knob_icon, (uint32_t)bp_pick(120, 180));
+	lv_image_set_scale(s->knob_icon, (uint32_t)bp_pick(130, 190));
 	s->knob_icon_w = (int)icon->header.w;
 	lv_obj_set_style_image_recolor(s->knob_icon, icon_tint, 0);
 	lv_obj_set_style_image_recolor_opa(s->knob_icon, LV_OPA_COVER, 0);
@@ -466,11 +466,11 @@ void powermenu_init(gui_config_t *cfg) {
 	// The two pills, upper section of the screen
 	lv_obj_t *pills = lv_obj_create(panel);
 	lv_obj_set_size(pills, lv_pct(100), LV_SIZE_CONTENT);
-	lv_obj_align(pills, LV_ALIGN_TOP_MID, 0, bp_pick(10, 20));
+	lv_obj_align(pills, LV_ALIGN_TOP_MID, 0, bp_pick(12, 20));
 	lv_obj_set_style_bg_opa(pills, 0, 0);
 	lv_obj_set_style_border_width(pills, 0, 0);
 	lv_obj_set_style_pad_all(pills, 0, 0);
-	lv_obj_set_style_pad_gap(pills, bp_pick(6, 12), 0);
+	lv_obj_set_style_pad_gap(pills, bp_pick(8, 14), 0);
 	lv_obj_set_scrollable(pills, false);
 	lv_obj_set_flex_flow(pills, LV_FLEX_FLOW_COLUMN);
 	lv_obj_set_flex_align(pills, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -480,28 +480,31 @@ void powermenu_init(gui_config_t *cfg) {
 
 	// Sleep timer card
 	sleep_card = lv_obj_create(panel);
-	lv_obj_set_size(sleep_card, SLIDE_WIDTH, bp_pick(126, 170));
-	lv_obj_align(sleep_card, LV_ALIGN_TOP_MID, 0, bp_pick(108, 170));
+	lv_obj_set_size(sleep_card, SLIDE_WIDTH, bp_pick(132, 180));
+	lv_obj_align(sleep_card, LV_ALIGN_TOP_MID, 0, bp_pick(124, 180));
 	lv_obj_set_style_radius(sleep_card, 16, 0);
 	lv_obj_set_style_bg_color(sleep_card, lv_color_white(), 0);
 	lv_obj_set_style_bg_opa(sleep_card, LV_OPA_20, 0);
 	lv_obj_set_style_border_width(sleep_card, 0, 0);
 	lv_obj_set_style_pad_hor(sleep_card, bp_pick(8, 14), 0);
-	lv_obj_set_style_pad_ver(sleep_card, bp_pick(6, 10), 0);
+	lv_obj_set_style_pad_ver(sleep_card, bp_pick(8, 12), 0);
 	lv_obj_set_scrollable(sleep_card, false);
 
 	// Header row
 	lv_obj_t *top_row = lv_obj_create(sleep_card);
-	lv_obj_set_size(top_row, lv_pct(100), bp_pick(24, 32));
+	lv_obj_set_size(top_row, lv_pct(100), bp_pick(26, 34));
 	lv_obj_set_style_bg_opa(top_row, 0, 0);
 	lv_obj_set_style_border_width(top_row, 0, 0);
 	lv_obj_set_style_pad_all(top_row, 0, 0);
 	lv_obj_set_scrollable(top_row, false);
 	lv_obj_align(top_row, LV_ALIGN_TOP_MID, 0, 0);
 
+	int icon_size = bp_pick(18, 24);
 	lv_obj_t *sleep_icon = lv_image_create(top_row);
 	lv_image_set_src(sleep_icon, &icon_sleep_music_quick);
-	lv_image_set_scale(sleep_icon, (uint32_t)bp_pick(90, 130));
+	lv_obj_set_size(sleep_icon, icon_size, icon_size);
+	lv_image_set_inner_align(sleep_icon, LV_IMAGE_ALIGN_CENTER);
+	lv_image_set_scale(sleep_icon, (uint32_t)(LV_SCALE_NONE * icon_size / 46));
 	lv_obj_set_style_image_recolor(sleep_icon, lv_color_white(), 0);
 	lv_obj_set_style_image_recolor_opa(sleep_icon, LV_OPA_COVER, 0);
 	lv_obj_align(sleep_icon, LV_ALIGN_LEFT_MID, 0, 0);
@@ -510,10 +513,10 @@ void powermenu_init(gui_config_t *cfg) {
 	lv_label_set_text(sleep_status_label, "Sleep: Off");
 	lv_obj_set_style_text_font(sleep_status_label, &font_ui_16, 0);
 	lv_obj_set_style_text_color(sleep_status_label, lv_color_white(), 0);
-	lv_obj_align(sleep_status_label, LV_ALIGN_LEFT_MID, bp_pick(22, 34), 0);
+	lv_obj_align(sleep_status_label, LV_ALIGN_LEFT_MID, bp_pick(26, 34), 0);
 
 	lv_obj_t *off_btn = lv_btn_create(top_row);
-	lv_obj_set_size(off_btn, bp_pick(36, 50), bp_pick(20, 26));
+	lv_obj_set_size(off_btn, bp_pick(40, 54), bp_pick(22, 28));
 	lv_obj_align(off_btn, LV_ALIGN_RIGHT_MID, 0, 0);
 	lv_obj_set_style_radius(off_btn, LV_RADIUS_CIRCLE, 0);
 	lv_obj_set_style_bg_color(off_btn, lv_color_white(), 0);
@@ -530,8 +533,8 @@ void powermenu_init(gui_config_t *cfg) {
 
 	// Presets row
 	lv_obj_t *presets_row = lv_obj_create(sleep_card);
-	lv_obj_set_size(presets_row, lv_pct(100), bp_pick(26, 34));
-	lv_obj_align(presets_row, LV_ALIGN_TOP_MID, 0, bp_pick(28, 38));
+	lv_obj_set_size(presets_row, lv_pct(100), bp_pick(28, 36));
+	lv_obj_align(presets_row, LV_ALIGN_TOP_MID, 0, bp_pick(32, 42));
 	lv_obj_set_style_bg_opa(presets_row, 0, 0);
 	lv_obj_set_style_border_width(presets_row, 0, 0);
 	lv_obj_set_style_pad_all(presets_row, 0, 0);
@@ -540,11 +543,11 @@ void powermenu_init(gui_config_t *cfg) {
 	lv_obj_set_scrollable(presets_row, false);
 
 	static const char *preset_texts[5] = {"10m", "30m", "60m", "120m", "Album"};
-	int preset_widths[5] = {bp_pick(32, 56), bp_pick(32, 56), bp_pick(32, 56), bp_pick(38, 64), bp_pick(52, 80)};
+	int preset_widths[5] = {bp_pick(32, 56), bp_pick(32, 56), bp_pick(32, 56), bp_pick(40, 66), bp_pick(52, 80)};
 
 	for (int i = 0; i < 5; i++) {
 		preset_btns[i] = lv_btn_create(presets_row);
-		lv_obj_set_size(preset_btns[i], preset_widths[i], bp_pick(24, 32));
+		lv_obj_set_size(preset_btns[i], preset_widths[i], bp_pick(26, 34));
 		lv_obj_set_style_radius(preset_btns[i], LV_RADIUS_CIRCLE, 0);
 		lv_obj_set_style_bg_color(preset_btns[i], lv_color_white(), 0);
 		lv_obj_set_style_bg_opa(preset_btns[i], LV_OPA_20, 0);
@@ -560,7 +563,7 @@ void powermenu_init(gui_config_t *cfg) {
 
 	// Stepper & Slider row
 	lv_obj_t *ctrl_row = lv_obj_create(sleep_card);
-	lv_obj_set_size(ctrl_row, lv_pct(100), bp_pick(36, 48));
+	lv_obj_set_size(ctrl_row, lv_pct(100), bp_pick(38, 50));
 	lv_obj_align(ctrl_row, LV_ALIGN_BOTTOM_MID, 0, bp_pick(-2, -4));
 	lv_obj_set_style_bg_opa(ctrl_row, 0, 0);
 	lv_obj_set_style_border_width(ctrl_row, 0, 0);
@@ -571,7 +574,7 @@ void powermenu_init(gui_config_t *cfg) {
 
 	// Minus button
 	lv_obj_t *btn_minus = lv_btn_create(ctrl_row);
-	lv_obj_set_size(btn_minus, bp_pick(30, 42), bp_pick(30, 42));
+	lv_obj_set_size(btn_minus, bp_pick(34, 46), bp_pick(34, 46));
 	lv_obj_set_style_radius(btn_minus, LV_RADIUS_CIRCLE, 0);
 	lv_obj_set_style_bg_color(btn_minus, lv_color_white(), 0);
 	lv_obj_set_style_bg_opa(btn_minus, LV_OPA_20, 0);
@@ -587,7 +590,7 @@ void powermenu_init(gui_config_t *cfg) {
 
 	// Slider
 	sleep_slider = lv_slider_create(ctrl_row);
-	lv_obj_set_size(sleep_slider, bp_pick(118, 240), bp_pick(12, 18));
+	lv_obj_set_size(sleep_slider, bp_pick(112, 230), bp_pick(14, 20));
 	lv_slider_set_range(sleep_slider, 0, 120);
 	lv_slider_set_value(sleep_slider, 0, LV_ANIM_OFF);
 	lv_obj_set_style_radius(sleep_slider, LV_RADIUS_CIRCLE, LV_PART_MAIN);
@@ -601,12 +604,12 @@ void powermenu_init(gui_config_t *cfg) {
 	lv_obj_set_style_radius(sleep_slider, LV_RADIUS_CIRCLE, LV_PART_KNOB);
 	lv_obj_set_style_bg_color(sleep_slider, lv_color_white(), LV_PART_KNOB);
 	lv_obj_set_style_bg_opa(sleep_slider, LV_OPA_COVER, LV_PART_KNOB);
-	lv_obj_set_style_pad_all(sleep_slider, bp_pick(4, 6), LV_PART_KNOB);
+	lv_obj_set_style_pad_all(sleep_slider, bp_pick(5, 7), LV_PART_KNOB);
 	lv_obj_add_event_cb(sleep_slider, slider_event_cb, LV_EVENT_ALL, NULL);
 
 	// Plus button
 	lv_obj_t *btn_plus = lv_btn_create(ctrl_row);
-	lv_obj_set_size(btn_plus, bp_pick(30, 42), bp_pick(30, 42));
+	lv_obj_set_size(btn_plus, bp_pick(34, 46), bp_pick(34, 46));
 	lv_obj_set_style_radius(btn_plus, LV_RADIUS_CIRCLE, 0);
 	lv_obj_set_style_bg_color(btn_plus, lv_color_white(), 0);
 	lv_obj_set_style_bg_opa(btn_plus, LV_OPA_20, 0);
@@ -623,7 +626,7 @@ void powermenu_init(gui_config_t *cfg) {
 	// Cancel button at bottom
 	lv_obj_t *cancel = lv_btn_create(panel);
 	lv_obj_set_size(cancel, CANCEL_SIZE, CANCEL_SIZE);
-	lv_obj_align(cancel, LV_ALIGN_BOTTOM_MID, 0, bp_pick(-10, -20));
+	lv_obj_align(cancel, LV_ALIGN_BOTTOM_MID, 0, bp_pick(-8, -14));
 	lv_obj_set_style_radius(cancel, LV_RADIUS_CIRCLE, 0);
 	lv_obj_set_style_bg_color(cancel, lv_color_white(), 0);
 	lv_obj_set_style_bg_opa(cancel, LV_OPA_30, 0);
@@ -635,7 +638,7 @@ void powermenu_init(gui_config_t *cfg) {
 
 	lv_obj_t *cancel_icon = lv_image_create(cancel);
 	lv_image_set_src(cancel_icon, &icon_close);
-	lv_image_set_scale(cancel_icon, (uint32_t)bp_pick(120, 180));
+	lv_image_set_scale(cancel_icon, (uint32_t)bp_pick(180, 256));
 	lv_obj_set_style_image_recolor(cancel_icon, lv_color_white(), 0);
 	lv_obj_set_style_image_recolor_opa(cancel_icon, LV_OPA_COVER, 0);
 	lv_obj_center(cancel_icon);
