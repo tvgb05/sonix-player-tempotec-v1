@@ -42,6 +42,32 @@
 #include "src/system/library/metadata.h"
 #include "src/system/playback/device_state.h"
 #include "src/system/streaming/podcast.h"
+#include "src/system/bluetooth/bluetooth.h"
+#include "src/system/bluetooth/btreceiver.h"
+#include "src/system/audio/usbdac.h"
+
+/* ---- btreceiver and usbdac stubs ---------------------------------------- */
+static btreceiver_state_t test_bt_state;
+static bt_track_t test_bt_track;
+static unsigned test_bt_serial = 1;
+static unsigned test_bt_track_serial = 1;
+
+bool btreceiver_is_active(void) { return test_bt_state.active; }
+bool btreceiver_is_streaming(void) { return test_bt_state.streaming; }
+void btreceiver_get_state(btreceiver_state_t *out) { if (out) *out = test_bt_state; }
+unsigned btreceiver_serial(void) { return test_bt_serial; }
+bool bluetooth_receiver_track(bt_track_t *out) {
+	if (out) *out = test_bt_track;
+	return test_bt_track.title[0] != '\0';
+}
+unsigned bluetooth_receiver_track_serial(void) { return test_bt_track_serial; }
+
+static usbdac_state_t test_usbdac_state;
+static unsigned test_usbdac_serial = 1;
+bool usbdac_is_active(void) { return test_usbdac_state.active; }
+bool usbdac_is_streaming(void) { return test_usbdac_state.streaming; }
+void usbdac_get_state(usbdac_state_t *out) { if (out) *out = test_usbdac_state; }
+unsigned usbdac_serial(void) { return test_usbdac_serial; }
 
 /* ---- fonts: every face is LVGL's built-in one ---------------------------- */
 
@@ -1048,6 +1074,38 @@ int main(int argc, char **argv) {
 	wake();
 	assert(strcmp(lv_label_get_text(strip_label(1)), "Reply All") == 0);
 	hide_now();
+
+	/* Bluetooth receiver mode: track title, artist and codec / bitrate */
+	state.status = AUDIO_STATUS_STOPPED;
+	state.current_file[0] = '\0';
+	test_bt_state.active = true;
+	test_bt_state.streaming = true;
+	snprintf(test_bt_state.device, sizeof(test_bt_state.device), "Pixel 8");
+	snprintf(test_bt_state.codec, sizeof(test_bt_state.codec), "LDAC");
+	test_bt_state.sample_rate = 96000;
+	test_bt_state.bits = 24;
+	snprintf(test_bt_track.title, sizeof(test_bt_track.title), "Hotel California");
+	snprintf(test_bt_track.artist, sizeof(test_bt_track.artist), "Eagles");
+	go_dark();
+	wake();
+	assert(strcmp(lv_label_get_text(strip_label(0)), "Hotel California") == 0);
+	assert(strcmp(lv_label_get_text(strip_label(1)), "Eagles  --  LDAC 96 kHz 24-bit") == 0);
+	hide_now();
+
+	/* USB DAC mode */
+	test_bt_state.active = false;
+	test_bt_state.streaming = false;
+	test_usbdac_state.active = true;
+	test_usbdac_state.streaming = true;
+	test_usbdac_state.sample_rate = 48000;
+	test_usbdac_state.bits = 32;
+	go_dark();
+	wake();
+	assert(strcmp(lv_label_get_text(strip_label(0)), "USB DAC") == 0);
+	assert(strcmp(lv_label_get_text(strip_label(1)), "48 kHz 32-bit") == 0);
+	hide_now();
+	test_usbdac_state.active = false;
+	test_usbdac_state.streaming = false;
 
 	/* Visualizer replaces the album, not the clock, and responds to PCM. */
 	screensaver_set_visualizer(true);

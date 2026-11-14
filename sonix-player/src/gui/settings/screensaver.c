@@ -21,6 +21,9 @@
 #include "src/system/playback/device_state.h"
 #include "src/system/device/power.h"
 #include "src/system/device/screensaverpics.h"
+#include "src/system/bluetooth/bluetooth.h"
+#include "src/system/bluetooth/btreceiver.h"
+#include "src/system/audio/usbdac.h"
 
 // Movement that turns a press into a drag, and how long the slide that follows
 // the release lasts. The dismiss threshold itself is a quarter of the screen,
@@ -503,6 +506,13 @@ static void refresh_clock(void) {
 // from a track that changed while the screensaver was up.
 static char shown_file[512];
 static const void *shown_cover;
+static bool shown_bt_active;
+static bool shown_bt_streaming;
+static unsigned shown_bt_serial;
+static unsigned shown_bt_track_serial;
+static bool shown_dac_active;
+static bool shown_dac_streaming;
+static unsigned shown_dac_serial;
 
 // Runs while the screensaver is up. The clock is the obvious reason, but the
 // important one is the track: the player frees its artwork at every track
@@ -528,8 +538,21 @@ static void clock_timer_cb(lv_timer_t *timer) {
 	device_state_get(&state);
 	const void *cover = player_cover_image();
 
+	bool bt_active = btreceiver_is_active();
+	bool bt_streaming = bt_active && btreceiver_is_streaming();
+	unsigned bt_serial = btreceiver_serial();
+	unsigned bt_track_serial = bluetooth_receiver_track_serial();
+
+	bool dac_active = usbdac_is_active();
+	bool dac_streaming = dac_active && usbdac_is_streaming();
+	unsigned dac_serial = usbdac_serial();
+
 	const char *now = state.live ? state.metadata.title : state.current_file;
-	if (framed_arrived || strcmp(now, shown_file) != 0 || cover != shown_cover || state.status != shown_status) {
+	if (framed_arrived || strcmp(now, shown_file) != 0 || cover != shown_cover || state.status != shown_status ||
+	    bt_active != shown_bt_active || bt_streaming != shown_bt_streaming ||
+	    bt_serial != shown_bt_serial || bt_track_serial != shown_bt_track_serial ||
+	    dac_active != shown_dac_active || dac_streaming != shown_dac_streaming ||
+	    dac_serial != shown_dac_serial) {
 		refresh_content(); // refreshes the clock on its way through
 		return;
 	}
@@ -796,6 +819,35 @@ static void draw_from_folder(void) {
 	set_info_strip_backdrop(image_strip.pixels ? &image_strip.dsc : NULL);
 }
 
+// Formats sample rate nicely: 44100 -> "44.1 kHz", 48000 -> "48 kHz", 96000 -> "96 kHz"
+static void format_rate(unsigned rate, char *out, size_t size) {
+	if (rate == 0) {
+		snprintf(out, size, "--");
+	} else if (rate % 1000 == 0) {
+		snprintf(out, size, "%u kHz", rate / 1000);
+	} else {
+		snprintf(out, size, "%.1f kHz", rate / 1000.0);
+	}
+}
+
+static void format_bt_codec_rate(const btreceiver_state_t *st, char *out, size_t size) {
+	char rate[24];
+	format_rate(st->sample_rate, rate, sizeof(rate));
+	if (st->codec[0]) {
+		if (st->bits > 0 && st->sample_rate > 0) {
+			snprintf(out, size, "%s %s %u-bit", st->codec, rate, st->bits);
+		} else if (st->sample_rate > 0) {
+			snprintf(out, size, "%s %s", st->codec, rate);
+		} else {
+			snprintf(out, size, "%s", st->codec);
+		}
+	} else if (st->sample_rate > 0) {
+		snprintf(out, size, "%s", rate);
+	} else {
+		out[0] = '\0';
+	}
+}
+
 // The artwork is the player's own, already decoded for this track: borrowed
 // for as long as the screensaver is up and dropped the moment it goes down,
 // so a track change while it is hidden can never leave a stale pointer here.
@@ -806,14 +858,17 @@ static void refresh_content(void) {
 	device_state_t state;
 	device_state_get(&state);
 	shown_status = state.status;
-	bool is_playing = (state.status == AUDIO_STATUS_PLAYING);
 
-	// Recorded before anything is drawn from it, so what the tick above
-	// compares against is exactly what ended up on screen. A live stream has no
-	// file, so the station name stands in; without it every radio would look
-	// identical to the tick and a change of station would never redraw.
-	snprintf(shown_file, sizeof(shown_file), "%s",
-			 state.live ? state.metadata.title : state.current_file);
+	shown_bt_active = btreceiver_is_active();
+	shown_bt_streaming = shown_bt_active && btreceiver_is_streaming();
+	shown_bt_serial = btreceiver_serial();
+	shown_bt_track_serial = bluetooth_receiver_track_serial();
+
+	shown_dac_active = usbdac_is_active();
+	shown_dac_streaming = shown_dac_active && usbdac_is_streaming();
+	shown_dac_serial = usbdac_serial();
+
+	bool is_playing = (state.status == AUDIO_STATUS_PLAYING) || shown_bt_streaming || shown_dac_streaming;
 
 	// The placeholder behind a missing cover says what kind of thing is
 	// playing: a note for a track, a radio for a stream.
@@ -821,32 +876,105 @@ static void refresh_content(void) {
 		lv_image_set_src(cover_placeholder, state.live ? &icon_radio_player : &icon_music_note);
 	}
 
-	if (is_playing) {
-		if (state.live) {
-			scrolltext_set(title_label, state.metadata.title);
-			scrolltext_set(artist_label, state.metadata.artist);
-		} else if (state.current_file[0]) {
-			const char *slash = strrchr(state.current_file, '/');
-			scrolltext_set(title_label, state.metadata.title[0] ? state.metadata.title
-																: (slash ? slash + 1 : state.current_file));
-			// A podcast episode has the show's own name in its artist field, because
-			// that is the line the player and the queue want under the episode. Here
-			// the line names the podcast's author instead, which only the sidecar
-			// knows -- and the player already reads it for its own star. Anything
-			// else, or an episode from a hand-copied file with no sidecar, keeps the
-			// artist the tags give.
-			podcast_feed_t feed;
-			const char *artist = player_current_podcast_feed(NULL, &feed) && feed.author[0]
-									? feed.author
-									: metadata_shown_artist(&state.metadata);
-			scrolltext_set(artist_label, artist);
+	if (shown_bt_active) {
+		btreceiver_state_t bt_st;
+		btreceiver_get_state(&bt_st);
+		if (bt_st.streaming) {
+			is_playing = true;
+		}
+
+		bt_track_t track;
+		bool has_track = bluetooth_receiver_track(&track) && track.title[0];
+
+		if (has_track) {
+			scrolltext_set(title_label, track.title);
+		} else if (bt_st.device[0]) {
+			scrolltext_set(title_label, bt_st.device);
+		} else {
+			scrolltext_set(title_label, "Bluetooth Audio");
+		}
+
+		char fmt_str[64];
+		format_bt_codec_rate(&bt_st, fmt_str, sizeof(fmt_str));
+
+		char subtitle[256];
+		if (has_track && track.artist[0]) {
+			if (fmt_str[0]) {
+				snprintf(subtitle, sizeof(subtitle), "%s  --  %s", track.artist, fmt_str);
+			} else {
+				snprintf(subtitle, sizeof(subtitle), "%s", track.artist);
+			}
+		} else if (has_track && track.album[0]) {
+			if (fmt_str[0]) {
+				snprintf(subtitle, sizeof(subtitle), "%s  --  %s", track.album, fmt_str);
+			} else {
+				snprintf(subtitle, sizeof(subtitle), "%s", track.album);
+			}
+		} else if (fmt_str[0]) {
+			snprintf(subtitle, sizeof(subtitle), "%s", fmt_str);
+		} else {
+			snprintf(subtitle, sizeof(subtitle), "%s", bt_st.streaming ? "Streaming" : "Connected");
+		}
+		scrolltext_set(artist_label, subtitle);
+
+		snprintf(shown_file, sizeof(shown_file), "bt:%s:%s:%s", bt_st.device, track.title, bt_st.codec);
+	} else if (shown_dac_active) {
+		usbdac_state_t dac_st;
+		usbdac_get_state(&dac_st);
+		if (dac_st.streaming) {
+			is_playing = true;
+		}
+
+		scrolltext_set(title_label, "USB DAC");
+
+		char subtitle[128];
+		if (dac_st.dsd) {
+			snprintf(subtitle, sizeof(subtitle), "DSD Audio");
+		} else if (dac_st.sample_rate > 0) {
+			char rate_str[24];
+			format_rate((unsigned)dac_st.sample_rate, rate_str, sizeof(rate_str));
+			snprintf(subtitle, sizeof(subtitle), "%s %d-bit", rate_str, dac_st.bits > 0 ? dac_st.bits : 32);
+		} else {
+			snprintf(subtitle, sizeof(subtitle), "%s", dac_st.streaming ? "Streaming" : "Connected");
+		}
+		scrolltext_set(artist_label, subtitle);
+
+		snprintf(shown_file, sizeof(shown_file), "usbdac:%d:%d", dac_st.sample_rate, dac_st.streaming);
+	} else {
+		// Recorded before anything is drawn from it, so what the tick above
+		// compares against is exactly what ended up on screen. A live stream has no
+		// file, so the station name stands in; without it every radio would look
+		// identical to the tick and a change of station would never redraw.
+		snprintf(shown_file, sizeof(shown_file), "%s",
+				 state.live ? state.metadata.title : state.current_file);
+
+		if (is_playing) {
+			if (state.live) {
+				scrolltext_set(title_label, state.metadata.title);
+				scrolltext_set(artist_label, state.metadata.artist);
+			} else if (state.current_file[0]) {
+				const char *slash = strrchr(state.current_file, '/');
+				scrolltext_set(title_label, state.metadata.title[0] ? state.metadata.title
+																	: (slash ? slash + 1 : state.current_file));
+				// A podcast episode has the show's own name in its artist field, because
+				// that is the line the player and the queue want under the episode. Here
+				// the line names the podcast's author instead, which only the sidecar
+				// knows -- and the player already reads it for its own star. Anything
+				// else, or an episode from a hand-copied file with no sidecar, keeps the
+				// artist the tags give.
+				podcast_feed_t feed;
+				const char *artist = player_current_podcast_feed(NULL, &feed) && feed.author[0]
+										? feed.author
+										: metadata_shown_artist(&state.metadata);
+				scrolltext_set(artist_label, artist);
+			} else {
+				scrolltext_set(title_label, "");
+				scrolltext_set(artist_label, "");
+			}
 		} else {
 			scrolltext_set(title_label, "");
 			scrolltext_set(artist_label, "");
 		}
-	} else {
-		scrolltext_set(title_label, "");
-		scrolltext_set(artist_label, "");
 	}
 
 	// Recorded whatever is being drawn: the tick above compares it to notice a
@@ -882,8 +1010,9 @@ static void refresh_content(void) {
 		return;
 	}
 
-	// Album mode: when music is NOT playing, display the lock wallpaper if one is ready
-	if (!is_playing) {
+	// Album mode: when music is NOT playing, or playing external audio with no cover art,
+	// display the lock wallpaper if one is ready
+	if (!is_playing || ((shown_bt_active || shown_dac_active) && !shown_cover)) {
 		if (image_pic.pixels) {
 			draw_from_folder();
 			refresh_clock();
@@ -1383,7 +1512,7 @@ static void spectrum_tick_led(void) {
 static bool spectrum_music_playing(void) {
 	device_state_t state;
 	device_state_get(&state);
-	return state.status == AUDIO_STATUS_PLAYING;
+	return (state.status == AUDIO_STATUS_PLAYING) || btreceiver_is_streaming() || usbdac_is_streaming();
 }
 
 // No music playing (stopped or paused): the rail goes and a note in the
